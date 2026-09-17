@@ -133,6 +133,49 @@ function ThreadPrintabilityNote({ majorDiameterMM, pitchMM }: { majorDiameterMM:
   return <p className="text-xs text-amber-500">{warning}</p>;
 }
 
+/** Read-only reference readout: how far a pending/edited placement sits from the target part's own bounding-box center — matches the cyan centerlines drawn in the viewport. */
+function CenterOffsetNote({ centerOffset }: { centerOffset: [number, number, number] | null }) {
+  if (!centerOffset) return null;
+  return (
+    <p className="text-[11px] text-slate-500">
+      Δ from part center — X: {centerOffset[0].toFixed(2)}, Y: {centerOffset[1].toFixed(2)}, Z: {centerOffset[2].toFixed(2)} mm
+    </p>
+  );
+}
+
+/** Numeric X/Y/Z position relative to the target part's own user-defined local origin — an alternative to eyeballing the click point. */
+function OffsetFields({
+  localOffset,
+  onChange,
+}: {
+  localOffset: [number, number, number] | null;
+  onChange: (axis: PlaneAxis, value: number) => void;
+}) {
+  if (!localOffset) return null;
+  return (
+    <div className="space-y-1">
+      <div className="panel-label !mb-1">Offset from local origin</div>
+      <div className="grid grid-cols-3 gap-1.5">
+        {(['x', 'y', 'z'] as const).map((axis, i) => (
+          <div key={axis} className="flex items-center gap-1">
+            <span className="text-[10px] uppercase text-slate-500">{axis}</span>
+            <input
+              type="number"
+              className="num-input !w-full !text-xs"
+              step={0.1}
+              value={localOffset[i]}
+              onChange={(e) => onChange(axis, parseFloat(e.target.value) || 0)}
+            />
+          </div>
+        ))}
+      </div>
+      <p className="text-[10px] leading-snug text-slate-600">
+        Set a part's local origin from the Parts panel. The axis along your click's surface normal is usually best left alone.
+      </p>
+    </div>
+  );
+}
+
 function DimensionsReadout() {
   const dimensions = useAppStore((s) => s.dimensions);
   const hasModel = useAppStore((s) => s.hasModel);
@@ -296,6 +339,7 @@ function HolePanel() {
   const { hole, hasModel, parts, setHole, viewportActions } = useAppStore();
   const selectedThread = findThreadStandard(hole.threadId);
   const targetLabel = parts.length > 1 ? parts.find((p) => p.id === hole.targetPartId)?.label : null;
+  const isEditing = !!hole.editingFeatureId;
 
   const handleThreadChange = (id: string | null) => {
     const thread = findThreadStandard(id);
@@ -304,11 +348,18 @@ function HolePanel() {
 
   return (
     <div className="panel-section space-y-3">
-      <div className="panel-label">Hole Modifier</div>
+      <div className="panel-label">{isEditing ? 'Edit Hole Feature' : 'Hole Modifier'}</div>
       {!hasModel ? (
         <p className="text-sm text-slate-500">Load a model first.</p>
       ) : !hole.placed ? (
         <p className="text-sm text-slate-400">Click a point on the model to place the cutter.</p>
+      ) : isEditing && hole.locked ? (
+        <>
+          <p className="text-sm text-amber-500">This feature is locked. Unlock it from the Parts panel to edit it.</p>
+          <button className="btn w-full" onClick={() => viewportActions?.cancelEditFeature()}>
+            Close
+          </button>
+        </>
       ) : (
         <>
           <ThreadSelect value={hole.threadId} onChange={handleThreadChange} />
@@ -323,14 +374,26 @@ function HolePanel() {
           <NumberField label="Depth" value={hole.depth} step={0.5} min={0.1} onChange={(v) => setHole({ depth: v })} />
           {selectedThread && <p className="text-xs text-slate-500">Cuts a standard internal (tapped) thread.</p>}
           {targetLabel && <p className="text-xs text-slate-500">Targeting: {targetLabel}</p>}
+          <CenterOffsetNote centerOffset={hole.centerOffset} />
+          <OffsetFields localOffset={hole.localOffset} onChange={(axis, v) => viewportActions?.setHoleOffset(axis, v)} />
           <div className="flex gap-2 pt-1">
             <button className="btn-primary flex-1" onClick={() => viewportActions?.applyHoleSubtract()}>
-              Apply Boolean Subtract
+              {isEditing ? 'Save Changes' : 'Apply Boolean Subtract'}
             </button>
-            <button className="btn" onClick={() => viewportActions?.cancelHolePlacement()}>
+            <button className="btn" onClick={() => (isEditing ? viewportActions?.cancelEditFeature() : viewportActions?.cancelHolePlacement())}>
               Cancel
             </button>
           </div>
+          {isEditing && (
+            <button
+              className="btn w-full text-red-400"
+              onClick={() => {
+                if (hole.targetPartId && hole.editingFeatureId) viewportActions?.deleteFeature(hole.targetPartId, hole.editingFeatureId);
+              }}
+            >
+              Delete Feature
+            </button>
+          )}
         </>
       )}
     </div>
@@ -352,6 +415,7 @@ function PrimitivePanel() {
   const { primitive, hasModel, parts, setPrimitive, viewportActions } = useAppStore();
   const selectedThread = findThreadStandard(primitive.threadId);
   const targetLabel = parts.length > 1 ? parts.find((p) => p.id === primitive.targetPartId)?.label : null;
+  const isEditing = !!primitive.editingFeatureId;
 
   const handleThreadChange = (id: string | null) => {
     const thread = findThreadStandard(id);
@@ -360,9 +424,16 @@ function PrimitivePanel() {
 
   return (
     <div className="panel-section space-y-3">
-      <div className="panel-label">Primitive</div>
+      <div className="panel-label">{isEditing ? 'Edit Primitive Feature' : 'Primitive'}</div>
       {!hasModel ? (
         <p className="text-sm text-slate-500">Load a model first.</p>
+      ) : isEditing && primitive.locked ? (
+        <>
+          <p className="text-sm text-amber-500">This feature is locked. Unlock it from the Parts panel to edit it.</p>
+          <button className="btn w-full" onClick={() => viewportActions?.cancelEditFeature()}>
+            Close
+          </button>
+        </>
       ) : (
         <>
           <div className="grid grid-cols-3 gap-1">
@@ -434,14 +505,32 @@ function PrimitivePanel() {
           {!primitive.placed ? (
             <p className="pt-1 text-sm text-slate-400">Click a point on the model to place the primitive.</p>
           ) : (
-            <div className="flex gap-2 pt-1">
-              <button className="btn-primary flex-1" onClick={() => viewportActions?.applyPrimitive()}>
-                Apply
-              </button>
-              <button className="btn" onClick={() => viewportActions?.cancelPrimitivePlacement()}>
-                Cancel
-              </button>
-            </div>
+            <>
+              <CenterOffsetNote centerOffset={primitive.centerOffset} />
+              <OffsetFields localOffset={primitive.localOffset} onChange={(axis, v) => viewportActions?.setPrimitiveOffset(axis, v)} />
+              <div className="flex gap-2 pt-1">
+                <button className="btn-primary flex-1" onClick={() => viewportActions?.applyPrimitive()}>
+                  {isEditing ? 'Save Changes' : 'Apply'}
+                </button>
+                <button
+                  className="btn"
+                  onClick={() => (isEditing ? viewportActions?.cancelEditFeature() : viewportActions?.cancelPrimitivePlacement())}
+                >
+                  Cancel
+                </button>
+              </div>
+              {isEditing && (
+                <button
+                  className="btn w-full text-red-400"
+                  onClick={() => {
+                    if (primitive.targetPartId && primitive.editingFeatureId)
+                      viewportActions?.deleteFeature(primitive.targetPartId, primitive.editingFeatureId);
+                  }}
+                >
+                  Delete Feature
+                </button>
+              )}
+            </>
           )}
         </>
       )}

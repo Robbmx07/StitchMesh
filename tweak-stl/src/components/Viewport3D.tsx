@@ -5,22 +5,30 @@ import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { STLExporter } from 'three/addons/exporters/STLExporter.js';
 import {
   ADDITION,
-  SUBTRACTION,
   createHoleCutterMesh,
   createPrimitiveMesh,
   performCSG,
   planeCutMesh,
   positionCutterAtSurface,
+  rebuildCompositeGeometry,
   type ThreadRenderOptions,
 } from '@/utils/csgOperations';
 import { findThreadStandard } from '@/utils/threadStandards';
 import { findPrinterProfile, recommendedThreadResolution } from '@/utils/printerProfiles';
 import { validateGeometry, repairWindingConsistency, mirrorGeometry, hasRepairableIssues, hasUnrepairableIssues } from '@/utils/meshRepair';
-import { useAppStore, type OrthoView, type PlaneAxis, type MeshIssues } from '@/state/useAppStore';
+import {
+  useAppStore,
+  type OrthoView,
+  type PlaneAxis,
+  type MeshIssues,
+  type PartFeature,
+  type PartInfo,
+} from '@/state/useAppStore';
 
 const MODEL_COLOR = 0x9ca3af;
 const MAX_HISTORY = 25;
 const HISTORY_COALESCE_MS = 1200;
+const SCALE_EPSILON = 1e-6;
 
 function makeModelMaterial(): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
@@ -31,16 +39,48 @@ function makeModelMaterial(): THREE.MeshStandardMaterial {
   });
 }
 
+function toTuple3(v: THREE.Vector3): [number, number, number] {
+  return [v.x, v.y, v.z];
+}
+
+function cloneFeature(f: PartFeature): PartFeature {
+  return { ...f, point: [...f.point] as [number, number, number], normal: [...f.normal] as [number, number, number] };
+}
+
 let partIdCounter = 0;
 function generatePartId(): string {
   partIdCounter += 1;
   return `part-${Date.now()}-${partIdCounter}`;
 }
 
+let featureIdCounter = 0;
+function generateFeatureId(): string {
+  featureIdCounter += 1;
+  return `feature-${Date.now()}-${featureIdCounter}`;
+}
+
+/**
+ * Per-part authoring state, kept outside React/Zustand: a stable "base"
+ * geometry (the imported shape, or the shape as of the last destructive
+ * rebase — see commitScaleIfNeeded/mirror/repair below) plus an ordered
+ * list of Hole/Primitive features composited on top of it. Every
+ * point/normal in `features` and `localOrigin` lives in this SAME stable
+ * local frame, so it stays correct no matter how the part's own mesh is
+ * later moved, rotated, or scaled — CSG recompute never touches world
+ * matrices at all (see rebuildCompositeGeometry).
+ */
+interface PartMeta {
+  baseGeometry: THREE.BufferGeometry;
+  features: PartFeature[];
+  localOrigin: THREE.Vector3;
+}
+
 interface HistoryMeshSnapshot {
   partId: string;
   partLabel: string;
-  geometry: THREE.BufferGeometry;
+  baseGeometry: THREE.BufferGeometry;
+  features: PartFeature[];
+  localOrigin: [number, number, number];
   position: [number, number, number];
   quaternion: [number, number, number, number];
   scale: [number, number, number];
@@ -60,9 +100,9 @@ export default function Viewport3D() {
   const controlsRef = useRef<OrbitControls | null>(null);
   const modelGroupRef = useRef<THREE.Group>(new THREE.Group());
   const materialRef = useRef<THREE.MeshStandardMaterial>(makeModelMaterial());
-  const baseSizeRef = useRef<THREE.Vector3>(new THREE.Vector3(1, 1, 1));
   const boxHelperRef = useRef<THREE.Box3Helper | null>(null);
   const previewMeshRef = useRef<THREE.Mesh | null>(null);
+  const centerlineGroupRef = useRef<THREE.Group | null>(null);
   const raycasterRef = useRef(new THREE.Raycaster());
   const fileNameRef = useRef<string>('model.stl');
   const undoStackRef = useRef<HistorySnapshot[]>([]);
@@ -72,6 +112,7 @@ export default function Viewport3D() {
   const datumMarkerRef = useRef<THREE.Object3D | null>(null);
   const pointMarkerRef = useRef<THREE.Object3D | null>(null);
   const measureLineRef = useRef<THREE.Line | null>(null);
+  const partMetaRef = useRef<Map<string, PartMeta>>(new Map());
 
   // ---- part bookkeeping (each mesh carries userData.partId/partLabel) --
   const getAllPartMeshes = (): THREE.Mesh[] =>
@@ -85,25 +126,7 @@ export default function Viewport3D() {
     return mesh ? (mesh.userData.partLabel as string) : null;
   };
 
-  const updateSelectedPartPosition = () => {
-    const partId = useAppStore.getState().selectedPartId;
-    const mesh = partId ? getPartMeshes(partId)[0] : null;
-    useAppStore.getState().setSelectedPartPosition(mesh ? (mesh.position.toArray() as [number, number, number]) : null);
-  };
-
-  const updateParts = () => {
-    const seen = new Map<string, string>();
-    getAllPartMeshes().forEach((m) => {
-      if (m.userData.partId) seen.set(m.userData.partId, m.userData.partLabel ?? m.userData.partId);
-    });
-    const parts = Array.from(seen.entries()).map(([id, label]) => ({ id, label }));
-    useAppStore.getState().setParts(parts);
-    const currentSelected = useAppStore.getState().selectedPartId;
-    if (!currentSelected || !seen.has(currentSelected)) {
-      useAppStore.getState().setSelectedPartId(parts[0]?.id ?? null);
-    }
-    updateSelectedPartPosition();
-  };
+  const getPartMeta = (partId: string): PartMeta | undefined => partMetaRef.current.get(partId);
 
   const getActivePartId = (): string | null => {
     const selected = useAppStore.getState().selectedPartId;
@@ -127,18 +150,55 @@ export default function Viewport3D() {
     modelGroupRef.current.add(mesh);
   };
 
+  // ---- local <-> world conversions (a part's own mesh transform) ------
+  const toLocalPoint = (mesh: THREE.Mesh, worldPoint: THREE.Vector3): THREE.Vector3 => {
+    mesh.updateMatrixWorld(true);
+    return mesh.worldToLocal(worldPoint.clone());
+  };
+  const toLocalNormal = (mesh: THREE.Mesh, worldNormal: THREE.Vector3): THREE.Vector3 => {
+    mesh.updateMatrixWorld(true);
+    const invQuat = mesh.getWorldQuaternion(new THREE.Quaternion()).invert();
+    return worldNormal.clone().applyQuaternion(invQuat).normalize();
+  };
+  const toWorldPoint = (mesh: THREE.Mesh, localPoint: THREE.Vector3): THREE.Vector3 => {
+    mesh.updateMatrixWorld(true);
+    return mesh.localToWorld(localPoint.clone());
+  };
+  const toWorldNormal = (mesh: THREE.Mesh, localNormal: THREE.Vector3): THREE.Vector3 => {
+    mesh.updateMatrixWorld(true);
+    const quat = mesh.getWorldQuaternion(new THREE.Quaternion());
+    return localNormal.clone().applyQuaternion(quat).normalize();
+  };
+
+  const syncPartFeaturesToStore = (partId: string) => {
+    const meta = getPartMeta(partId);
+    useAppStore.getState().setPartFeatures(partId, meta ? meta.features.map(cloneFeature) : []);
+  };
+
+  const updateSelectedPartPosition = () => {
+    const partId = useAppStore.getState().selectedPartId;
+    const mesh = partId ? getPartMeshes(partId)[0] : null;
+    useAppStore.getState().setSelectedPartPosition(mesh ? (mesh.position.toArray() as [number, number, number]) : null);
+  };
+
+  /** Selected part's own bounding box drives the "Bounding Box" readout and Scale panel — not the whole scene. */
   const updateDimensions = () => {
-    const group = modelGroupRef.current;
-    if (group.children.length === 0) {
+    const scene = sceneRef.current;
+    const partId = getActivePartId();
+    const mesh = partId ? getPartMeshes(partId)[0] : null;
+    if (!mesh) {
       useAppStore.getState().setDimensions({ x: 0, y: 0, z: 0 });
+      if (scene && boxHelperRef.current) {
+        scene.remove(boxHelperRef.current);
+        boxHelperRef.current = null;
+      }
       return;
     }
-    const box = new THREE.Box3().setFromObject(group);
+    const box = new THREE.Box3().setFromObject(mesh);
     const size = new THREE.Vector3();
     box.getSize(size);
     useAppStore.getState().setDimensions({ x: size.x, y: size.y, z: size.z });
 
-    const scene = sceneRef.current;
     if (scene) {
       if (boxHelperRef.current) scene.remove(boxHelperRef.current);
       const helper = new THREE.Box3Helper(box, new THREE.Color(0x3b82f6));
@@ -147,6 +207,26 @@ export default function Viewport3D() {
       scene.add(helper);
       boxHelperRef.current = helper;
     }
+  };
+
+  const updateParts = () => {
+    const seen = new Map<string, string>();
+    getAllPartMeshes().forEach((m) => {
+      if (m.userData.partId) seen.set(m.userData.partId, m.userData.partLabel ?? m.userData.partId);
+    });
+    const parts: PartInfo[] = Array.from(seen.entries()).map(([id, label]) => {
+      const origin = getPartMeta(id)?.localOrigin ?? new THREE.Vector3(0, 0, 0);
+      return { id, label, localOrigin: toTuple3(origin) };
+    });
+    useAppStore.getState().setParts(parts);
+    seen.forEach((_, id) => syncPartFeaturesToStore(id));
+
+    const currentSelected = useAppStore.getState().selectedPartId;
+    if (!currentSelected || !seen.has(currentSelected)) {
+      useAppStore.getState().setSelectedPartId(parts[0]?.id ?? null);
+    }
+    updateSelectedPartPosition();
+    updateDimensions();
   };
 
   const clearPreview = () => {
@@ -158,31 +238,82 @@ export default function Viewport3D() {
     previewMeshRef.current = null;
   };
 
-  const replacePartMeshes = (partId: string, label: string, meshes: THREE.Mesh[]) => {
-    removePartMeshes(partId);
-    meshes.forEach((mesh) => addPartMesh(partId, label, mesh));
-    updateDimensions();
-    updateParts();
-  };
-
-  const getMergedPartMesh = (partId: string): THREE.Mesh | null => {
-    const meshes = getPartMeshes(partId);
-    if (meshes.length === 0) return null;
-    let result = meshes[0];
-    for (let i = 1; i < meshes.length; i++) {
-      result = performCSG(result, meshes[i], ADDITION, materialRef.current);
+  const clearCenterlines = () => {
+    const scene = sceneRef.current;
+    if (centerlineGroupRef.current) {
+      centerlineGroupRef.current.traverse((obj) => {
+        if (obj instanceof THREE.Line) {
+          obj.geometry.dispose();
+          (obj.material as THREE.Material).dispose();
+        }
+      });
+      if (scene) scene.remove(centerlineGroupRef.current);
     }
-    return result;
+    centerlineGroupRef.current = null;
   };
 
-  /** Bakes a part's full world transform into a standalone geometry (safe regardless of Move-tool offsets). */
-  const getBakedPartGeometry = (partId: string): THREE.BufferGeometry | null => {
-    const merged = getMergedPartMesh(partId);
-    if (!merged) return null;
-    merged.updateMatrixWorld(true);
-    const baked = merged.geometry.clone();
-    baked.applyMatrix4(merged.matrixWorld);
-    return baked;
+  /** Two dashed reference lines through the target part's own center, on the two axes NOT aligned with the click normal — shows how far off-center a hole/primitive placement is. */
+  const showCenterlines = (mesh: THREE.Mesh, normal: THREE.Vector3) => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    clearCenterlines();
+
+    const box = new THREE.Box3().setFromObject(mesh);
+    const center = new THREE.Vector3();
+    const size = new THREE.Vector3();
+    box.getCenter(center);
+    box.getSize(size);
+    const margin = Math.max(size.x, size.y, size.z) * 0.15 + 2;
+
+    const absN: Record<'x' | 'y' | 'z', number> = { x: Math.abs(normal.x), y: Math.abs(normal.y), z: Math.abs(normal.z) };
+    const dominant = (['x', 'y', 'z'] as const).reduce((a, b) => (absN[a] >= absN[b] ? a : b));
+    const axes = (['x', 'y', 'z'] as const).filter((a) => a !== dominant);
+
+    const group = new THREE.Group();
+    group.name = 'CenterlineOverlay';
+    axes.forEach((axis) => {
+      const half = size[axis] / 2 + margin;
+      const a = center.clone();
+      const b = center.clone();
+      a[axis] -= half;
+      b[axis] += half;
+      const geometry = new THREE.BufferGeometry().setFromPoints([a, b]);
+      const material = new THREE.LineDashedMaterial({
+        color: 0x22d3ee,
+        dashSize: 3,
+        gapSize: 1.5,
+        depthTest: false,
+        transparent: true,
+        opacity: 0.85,
+      });
+      const line = new THREE.Line(geometry, material);
+      line.computeLineDistances();
+      line.renderOrder = 997;
+      group.add(line);
+    });
+
+    scene.add(group);
+    centerlineGroupRef.current = group;
+  };
+
+  const computeCenterOffset = (mesh: THREE.Mesh, worldPoint: THREE.Vector3): [number, number, number] => {
+    const box = new THREE.Box3().setFromObject(mesh);
+    const center = new THREE.Vector3();
+    box.getCenter(center);
+    return toTuple3(worldPoint.clone().sub(center));
+  };
+
+  const computeLocalOffset = (mesh: THREE.Mesh, worldPoint: THREE.Vector3, localOrigin: THREE.Vector3): [number, number, number] => {
+    const local = toLocalPoint(mesh, worldPoint);
+    return toTuple3(local.sub(localOrigin));
+  };
+
+  const updatePlacementReadouts = (tool: 'hole' | 'primitive', mesh: THREE.Mesh, worldPoint: THREE.Vector3, partId: string) => {
+    const meta = getPartMeta(partId);
+    const centerOffset = computeCenterOffset(mesh, worldPoint);
+    const localOffset = meta ? computeLocalOffset(mesh, worldPoint, meta.localOrigin) : null;
+    if (tool === 'hole') useAppStore.getState().setHole({ centerOffset, localOffset });
+    else useAppStore.getState().setPrimitive({ centerOffset, localOffset });
   };
 
   /** Resolves the current thread selection into render options tuned for the active printer profile. */
@@ -230,37 +361,93 @@ export default function Viewport3D() {
     return fixed;
   };
 
-  // performCSG bakes each operand's full WORLD transform into the result's
-  // vertex positions, so the result must be shown with an identity parent
-  // transform or the group's own position/rotation/scale (e.g. the
-  // "drop to build plate" offset applied on load, or a Transform-panel
-  // scale) would be applied a second time on top of the already-baked
-  // geometry. Call this right after adding a CSG result to the group.
-  const bakeGroupTransformToIdentity = () => {
-    const group = modelGroupRef.current;
-    group.position.set(0, 0, 0);
-    group.rotation.set(0, 0, 0);
-    group.scale.set(1, 1, 1);
-    group.updateMatrixWorld(true);
+  /** Recomposites a part's base geometry + its feature list (in local space) and assigns the result to its mesh. */
+  const rebuildPart = (partId: string) => {
+    const meta = getPartMeta(partId);
+    const mesh = getPartMeshes(partId)[0];
+    if (!meta || !mesh) return;
+    const compiled = rebuildCompositeGeometry(meta.baseGeometry, meta.features, getThreadRenderOptions, materialRef.current);
+    mesh.geometry.dispose();
+    mesh.geometry = compiled;
+    syncPartFeaturesToStore(partId);
     updateDimensions();
+  };
 
-    const box = new THREE.Box3().setFromObject(group);
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    baseSizeRef.current = size.clone();
-    useAppStore.getState().setTransform({ scaleX: 100, scaleY: 100, scaleZ: 100 });
+  /** Replaces a part's displayed (and optionally base) geometry directly — used by Mirror/Repair, which flatten the current shape rather than editing it as a feature. */
+  const setPartGeometry = (partId: string, newGeometry: THREE.BufferGeometry, resetFeatures: boolean) => {
+    const mesh = getPartMeshes(partId)[0];
+    const meta = getPartMeta(partId);
+    if (!mesh || !meta) return;
+    mesh.geometry.dispose();
+    mesh.geometry = newGeometry;
+    if (resetFeatures) {
+      meta.baseGeometry.dispose();
+      meta.baseGeometry = newGeometry.clone();
+      meta.features = [];
+      syncPartFeaturesToStore(partId);
+    }
+  };
+
+  /**
+   * A new feature's diameter/depth are typed as real-world mm, but features
+   * composite in the part's own LOCAL frame — correct only while the part's
+   * live scale is 1:1. If the part has been scaled, bake that scale into the
+   * base geometry first (folding any earlier features into the new base,
+   * since they're no longer separable from the now-permanent scale change)
+   * so a freshly-added feature's dimensions come out right in world space.
+   */
+  const commitScaleIfNeeded = (partId: string) => {
+    const mesh = getPartMeshes(partId)[0];
+    const meta = getPartMeta(partId);
+    if (!mesh || !meta) return;
+    const { x: sx, y: sy, z: sz } = mesh.scale;
+    if (Math.abs(sx - 1) < SCALE_EPSILON && Math.abs(sy - 1) < SCALE_EPSILON && Math.abs(sz - 1) < SCALE_EPSILON) return;
+
+    const baked = mesh.geometry.clone();
+    baked.scale(sx, sy, sz);
+    baked.computeVertexNormals();
+    baked.computeBoundingBox();
+    baked.computeBoundingSphere();
+
+    mesh.geometry.dispose();
+    mesh.geometry = baked;
+    mesh.scale.set(1, 1, 1);
+    mesh.updateMatrixWorld(true);
+
+    meta.baseGeometry.dispose();
+    meta.baseGeometry = baked.clone();
+    meta.features = [];
+    meta.localOrigin.set(0, 0, 0);
+    syncPartFeaturesToStore(partId);
+  };
+
+  /** Merges a part's (usually single) meshes into one, for operations that still need a plain THREE.Mesh — Plane Cut only. */
+  const getMergedPartMesh = (partId: string): THREE.Mesh | null => {
+    const meshes = getPartMeshes(partId);
+    if (meshes.length === 0) return null;
+    let result = meshes[0];
+    for (let i = 1; i < meshes.length; i++) {
+      result = performCSG(result, meshes[i], ADDITION, materialRef.current);
+    }
+    return result;
   };
 
   // ---- undo/redo history ---------------------------------------------
   const captureSnapshot = (): HistorySnapshot => ({
-    meshes: getAllPartMeshes().map((m) => ({
-      partId: m.userData.partId,
-      partLabel: m.userData.partLabel,
-      geometry: m.geometry.clone(),
-      position: m.position.toArray() as [number, number, number],
-      quaternion: m.quaternion.toArray() as [number, number, number, number],
-      scale: m.scale.toArray() as [number, number, number],
-    })),
+    meshes: getAllPartMeshes().map((m) => {
+      const partId = m.userData.partId as string;
+      const meta = getPartMeta(partId);
+      return {
+        partId,
+        partLabel: m.userData.partLabel,
+        baseGeometry: (meta?.baseGeometry ?? m.geometry).clone(),
+        features: meta ? meta.features.map(cloneFeature) : [],
+        localOrigin: meta ? toTuple3(meta.localOrigin) : [0, 0, 0],
+        position: m.position.toArray() as [number, number, number],
+        quaternion: m.quaternion.toArray() as [number, number, number, number],
+        scale: m.scale.toArray() as [number, number, number],
+      };
+    }),
     fileName: useAppStore.getState().fileName,
     hasModel: useAppStore.getState().hasModel,
   });
@@ -271,11 +458,21 @@ export default function Viewport3D() {
       group.remove(child);
       if (child instanceof THREE.Mesh) child.geometry.dispose();
     });
+    partMetaRef.current.forEach((meta) => meta.baseGeometry.dispose());
+    partMetaRef.current.clear();
     group.position.set(0, 0, 0);
     group.rotation.set(0, 0, 0);
     group.scale.set(1, 1, 1);
+
     snap.meshes.forEach((ms) => {
-      const mesh = new THREE.Mesh(ms.geometry.clone(), materialRef.current);
+      const meta: PartMeta = {
+        baseGeometry: ms.baseGeometry.clone(),
+        features: ms.features.map(cloneFeature),
+        localOrigin: new THREE.Vector3(...ms.localOrigin),
+      };
+      partMetaRef.current.set(ms.partId, meta);
+      const compiled = rebuildCompositeGeometry(meta.baseGeometry, meta.features, getThreadRenderOptions, materialRef.current);
+      const mesh = new THREE.Mesh(compiled, materialRef.current);
       mesh.name = 'ModelPiece';
       mesh.position.fromArray(ms.position);
       mesh.quaternion.fromArray(ms.quaternion);
@@ -283,15 +480,11 @@ export default function Viewport3D() {
       addPartMesh(ms.partId, ms.partLabel, mesh);
     });
     clearPreview();
+    clearCenterlines();
     useAppStore.getState().setFileName(snap.fileName);
     useAppStore.getState().setHasModel(snap.hasModel);
-    updateDimensions();
+    useAppStore.getState().setSelectedFeatureId(null);
     updateParts();
-
-    const box = new THREE.Box3().setFromObject(group);
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    baseSizeRef.current = size.clone();
     useAppStore.getState().setTransform({ scaleX: 100, scaleY: 100, scaleZ: 100 });
   };
 
@@ -391,7 +584,7 @@ export default function Viewport3D() {
     };
     animate();
 
-    // ---- pointer interaction for hole / primitive / measure placement --
+    // ---- pointer interaction for hole / primitive / measure / origin-pick --
     const getIntersection = (event: PointerEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
       const ndc = new THREE.Vector2(
@@ -450,6 +643,9 @@ export default function Viewport3D() {
       const worldNormal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize();
       updateCutterPreview(hit.point, worldNormal);
       const partId = (hit.object.userData.partId as string) ?? null;
+      const hitMesh = hit.object as THREE.Mesh;
+
+      if (partId) showCenterlines(hitMesh, worldNormal);
 
       if (tool === 'hole') {
         useAppStore.getState().setHole({
@@ -464,9 +660,25 @@ export default function Viewport3D() {
           targetPartId: partId,
         });
       }
+      if (partId) updatePlacementReadouts(tool, hitMesh, hit.point, partId);
     };
 
     const onPointerDown = (event: PointerEvent) => {
+      const { pickingOrigin, pickingOriginPartId } = useAppStore.getState();
+      if (pickingOrigin && pickingOriginPartId) {
+        const hit = getIntersection(event);
+        if (hit && hit.object.userData.partId === pickingOriginPartId) {
+          const mesh = hit.object as THREE.Mesh;
+          const meta = getPartMeta(pickingOriginPartId);
+          if (meta) {
+            meta.localOrigin.copy(toLocalPoint(mesh, hit.point));
+            updateParts();
+          }
+        }
+        useAppStore.getState().setPickingOrigin(false, null);
+        return;
+      }
+
       const tool = useAppStore.getState().activeTool;
       if (tool === 'measure') {
         const hit = getIntersection(event);
@@ -538,31 +750,29 @@ export default function Viewport3D() {
           modelGroupRef.current.remove(child);
           if (child instanceof THREE.Mesh) child.geometry.dispose();
         });
+        partMetaRef.current.forEach((meta) => meta.baseGeometry.dispose());
+        partMetaRef.current.clear();
         useAppStore.getState().setMeshIssues([]);
+        useAppStore.getState().setPickingOrigin(false, null);
         resetHistory();
 
         const partId = generatePartId();
         geometry = validateAndAutoRepair(geometry, partId, name);
+        partMetaRef.current.set(partId, { baseGeometry: geometry.clone(), features: [], localOrigin: new THREE.Vector3(0, 0, 0) });
 
         const mesh = new THREE.Mesh(geometry, materialRef.current);
         mesh.name = 'ModelPiece';
         addPartMesh(partId, name, mesh);
-        useAppStore.getState().setSelectedPartId(partId);
-        clearPreview();
 
-        const box = new THREE.Box3().setFromObject(modelGroupRef.current);
-        const size = new THREE.Vector3();
-        box.getSize(size);
-        baseSizeRef.current = size.clone();
-        modelGroupRef.current.scale.set(1, 1, 1);
-        modelGroupRef.current.position.set(0, 0, -box.min.z);
-        modelGroupRef.current.rotation.set(0, 0, 0);
+        const box = new THREE.Box3().setFromObject(mesh);
+        mesh.position.set(0, 0, -box.min.z); // drop to build plate
+        clearPreview();
 
         fileNameRef.current = name;
         useAppStore.getState().setFileName(name);
         useAppStore.getState().setHasModel(true);
         useAppStore.getState().setTransform({ scaleX: 100, scaleY: 100, scaleZ: 100 });
-        updateDimensions();
+        useAppStore.getState().setSelectedPartId(partId);
         updateParts();
 
         const fitBox = new THREE.Box3().setFromObject(modelGroupRef.current);
@@ -589,6 +799,7 @@ export default function Viewport3D() {
 
         const partId = generatePartId();
         geometry = validateAndAutoRepair(geometry, partId, name);
+        partMetaRef.current.set(partId, { baseGeometry: geometry.clone(), features: [], localOrigin: new THREE.Vector3(0, 0, 0) });
 
         const newSize = new THREE.Vector3();
         geometry.boundingBox!.getSize(newSize);
@@ -602,9 +813,8 @@ export default function Viewport3D() {
         mesh.position.set(offsetX, 0, offsetZ);
         addPartMesh(partId, name, mesh);
 
-        updateDimensions();
-        updateParts();
         useAppStore.getState().setSelectedPartId(partId);
+        updateParts();
         useAppStore.getState().setActiveTool('select');
       },
 
@@ -613,17 +823,21 @@ export default function Viewport3D() {
           modelGroupRef.current.remove(child);
           if (child instanceof THREE.Mesh) child.geometry.dispose();
         });
+        partMetaRef.current.forEach((meta) => meta.baseGeometry.dispose());
+        partMetaRef.current.clear();
         modelGroupRef.current.position.set(0, 0, 0);
         modelGroupRef.current.rotation.set(0, 0, 0);
         modelGroupRef.current.scale.set(1, 1, 1);
         clearPreview();
+        clearCenterlines();
         resetHistory();
         useAppStore.getState().setMeshIssues([]);
+        useAppStore.getState().setPickingOrigin(false, null);
+        useAppStore.getState().setSelectedFeatureId(null);
         useAppStore.getState().setFileName(null);
         useAppStore.getState().setHasModel(false);
         useAppStore.getState().setActiveTool('select');
         useAppStore.getState().setTransform({ scaleX: 100, scaleY: 100, scaleZ: 100 });
-        updateDimensions();
         updateParts();
       },
 
@@ -676,112 +890,183 @@ export default function Viewport3D() {
       },
 
       applyScale: (x, y, z) => {
-        pushHistoryCoalesced('scale');
-        const base = baseSizeRef.current;
-        modelGroupRef.current.scale.set(
-          x / Math.max(base.x, 1e-6),
-          y / Math.max(base.y, 1e-6),
-          z / Math.max(base.z, 1e-6),
-        );
+        const activePartId = getActivePartId();
+        if (!activePartId) return;
+        const mesh = getPartMeshes(activePartId)[0];
+        if (!mesh) return;
+        pushHistoryCoalesced('scale-' + activePartId);
+        if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+        const base = new THREE.Vector3();
+        mesh.geometry.boundingBox!.getSize(base);
+        mesh.scale.set(x / Math.max(base.x, 1e-6), y / Math.max(base.y, 1e-6), z / Math.max(base.z, 1e-6));
         updateDimensions();
       },
 
       rotateBy: (axis, degrees) => {
+        const activePartId = getActivePartId();
+        if (!activePartId) return;
+        const mesh = getPartMeshes(activePartId)[0];
+        if (!mesh) return;
         pushHistory();
         const rad = THREE.MathUtils.degToRad(degrees);
-        modelGroupRef.current.rotation[axis] += rad;
-        modelGroupRef.current.position.z -= new THREE.Box3().setFromObject(modelGroupRef.current).min.z;
+        mesh.rotation[axis] += rad;
+        mesh.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(mesh);
+        mesh.position.z -= box.min.z;
         updateDimensions();
       },
 
       centerToOrigin: () => {
+        const activePartId = getActivePartId();
+        if (!activePartId) return;
+        const mesh = getPartMeshes(activePartId)[0];
+        if (!mesh) return;
         pushHistory();
-        const box = new THREE.Box3().setFromObject(modelGroupRef.current);
+        const box = new THREE.Box3().setFromObject(mesh);
         const center = new THREE.Vector3();
         box.getCenter(center);
-        modelGroupRef.current.position.x -= center.x;
-        modelGroupRef.current.position.y -= center.y;
-        modelGroupRef.current.position.z -= center.z;
+        mesh.position.sub(center);
         updateDimensions();
       },
 
       dropToBuildPlate: () => {
+        const activePartId = getActivePartId();
+        if (!activePartId) return;
+        const mesh = getPartMeshes(activePartId)[0];
+        if (!mesh) return;
         pushHistory();
-        const box = new THREE.Box3().setFromObject(modelGroupRef.current);
-        modelGroupRef.current.position.z -= box.min.z;
+        const box = new THREE.Box3().setFromObject(mesh);
+        mesh.position.z -= box.min.z;
         updateDimensions();
       },
 
       mirror: (axis: PlaneAxis) => {
         const activePartId = getActivePartId();
         if (!activePartId) return;
-        const baked = getBakedPartGeometry(activePartId);
-        if (!baked) return;
+        const mesh = getPartMeshes(activePartId)[0];
+        if (!mesh) return;
         pushHistory();
-        const mirroredGeometry = mirrorGeometry(baked, axis);
-        const result = new THREE.Mesh(mirroredGeometry, materialRef.current);
-        result.name = 'ModelPiece';
-        replacePartMeshes(activePartId, getPartLabel(activePartId) ?? 'Model', [result]);
-        bakeGroupTransformToIdentity();
+        const mirrored = mirrorGeometry(mesh.geometry, axis);
+        setPartGeometry(activePartId, mirrored, true);
+        updateDimensions();
       },
 
       applyHoleSubtract: () => {
-        const { diameter, depth, point, normal, threadId, targetPartId } = useAppStore.getState().hole;
+        const { diameter, depth, point, normal, threadId, targetPartId, editingFeatureId } = useAppStore.getState().hole;
         const partId = targetPartId ?? getActivePartId();
         if (!partId || !point || !normal) return;
-        const target = getMergedPartMesh(partId);
-        if (!target) return;
+        const mesh = getPartMeshes(partId)[0];
+        const meta = getPartMeta(partId);
+        if (!mesh || !meta) return;
 
         pushHistory();
-        const cutter = createHoleCutterMesh(diameter, depth, getThreadRenderOptions(threadId, true));
-        positionCutterAtSurface(cutter, new THREE.Vector3(...point), new THREE.Vector3(...normal), depth, 'subtract');
-        cutter.updateMatrix();
 
-        const result = performCSG(target, cutter, SUBTRACTION, materialRef.current);
-        result.name = 'ModelPiece';
-        replacePartMeshes(partId, getPartLabel(partId) ?? 'Model', [result]);
-        bakeGroupTransformToIdentity();
+        if (editingFeatureId) {
+          const idx = meta.features.findIndex((f) => f.id === editingFeatureId);
+          if (idx === -1) return;
+          if (meta.features[idx].locked) return;
+          const localPoint = toLocalPoint(mesh, new THREE.Vector3(...point));
+          const localNormal = toLocalNormal(mesh, new THREE.Vector3(...normal));
+          meta.features[idx] = { ...meta.features[idx], diameter, depth, threadId, point: toTuple3(localPoint), normal: toTuple3(localNormal) };
+        } else {
+          commitScaleIfNeeded(partId);
+          const localPoint = toLocalPoint(mesh, new THREE.Vector3(...point));
+          const localNormal = toLocalNormal(mesh, new THREE.Vector3(...normal));
+          const holeCount = meta.features.filter((f) => f.type === 'hole').length + 1;
+          meta.features.push({
+            id: generateFeatureId(),
+            type: 'hole',
+            label: `Hole ${holeCount}`,
+            locked: false,
+            point: toTuple3(localPoint),
+            normal: toTuple3(localNormal),
+            diameter,
+            depth,
+            threadId,
+            shape: 'cylinder',
+            operation: 'subtract',
+            width: 0,
+            height: depth,
+            innerDiameter: 0,
+          });
+        }
+
+        rebuildPart(partId);
         clearPreview();
         useAppStore.getState().resetHole();
+        useAppStore.getState().setSelectedFeatureId(null);
         useAppStore.getState().setActiveTool('select');
       },
 
       cancelHolePlacement: () => {
         clearPreview();
         useAppStore.getState().resetHole();
+        useAppStore.getState().setSelectedFeatureId(null);
       },
 
       applyPrimitive: () => {
         const p = useAppStore.getState().primitive;
         const partId = p.targetPartId ?? getActivePartId();
         if (!partId || !p.point || !p.normal) return;
-        const target = getMergedPartMesh(partId);
-        if (!target) return;
+        const mesh = getPartMeshes(partId)[0];
+        const meta = getPartMeta(partId);
+        if (!mesh || !meta) return;
 
         pushHistory();
-        const primitiveMesh = createPrimitiveMesh(p.shape, p, getThreadRenderOptions(p.threadId, p.operation === 'subtract'));
-        positionCutterAtSurface(
-          primitiveMesh,
-          new THREE.Vector3(...p.point),
-          new THREE.Vector3(...p.normal),
-          p.height,
-          p.operation === 'subtract' ? 'subtract' : 'union',
-        );
-        primitiveMesh.updateMatrix();
 
-        const op = p.operation === 'union' ? ADDITION : SUBTRACTION;
-        const result = performCSG(target, primitiveMesh, op, materialRef.current);
-        result.name = 'ModelPiece';
-        replacePartMeshes(partId, getPartLabel(partId) ?? 'Model', [result]);
-        bakeGroupTransformToIdentity();
+        if (p.editingFeatureId) {
+          const idx = meta.features.findIndex((f) => f.id === p.editingFeatureId);
+          if (idx === -1) return;
+          if (meta.features[idx].locked) return;
+          const localPoint = toLocalPoint(mesh, new THREE.Vector3(...p.point));
+          const localNormal = toLocalNormal(mesh, new THREE.Vector3(...p.normal));
+          meta.features[idx] = {
+            ...meta.features[idx],
+            diameter: p.diameter,
+            depth: p.depth,
+            height: p.height,
+            width: p.width,
+            innerDiameter: p.innerDiameter,
+            threadId: p.threadId,
+            shape: p.shape,
+            operation: p.operation,
+            point: toTuple3(localPoint),
+            normal: toTuple3(localNormal),
+          };
+        } else {
+          commitScaleIfNeeded(partId);
+          const localPoint = toLocalPoint(mesh, new THREE.Vector3(...p.point));
+          const localNormal = toLocalNormal(mesh, new THREE.Vector3(...p.normal));
+          const count = meta.features.filter((f) => f.type === 'primitive').length + 1;
+          meta.features.push({
+            id: generateFeatureId(),
+            type: 'primitive',
+            label: `${p.operation === 'union' ? 'Add' : 'Cut'} ${p.shape} ${count}`,
+            locked: false,
+            point: toTuple3(localPoint),
+            normal: toTuple3(localNormal),
+            diameter: p.diameter,
+            depth: p.depth,
+            threadId: p.threadId,
+            shape: p.shape,
+            operation: p.operation,
+            width: p.width,
+            height: p.height,
+            innerDiameter: p.innerDiameter,
+          });
+        }
+
+        rebuildPart(partId);
         clearPreview();
         useAppStore.getState().resetPrimitivePlacement();
+        useAppStore.getState().setSelectedFeatureId(null);
         useAppStore.getState().setActiveTool('select');
       },
 
       cancelPrimitivePlacement: () => {
         clearPreview();
         useAppStore.getState().resetPrimitivePlacement();
+        useAppStore.getState().setSelectedFeatureId(null);
       },
 
       applyPlaneCut: () => {
@@ -801,13 +1086,18 @@ export default function Viewport3D() {
         // than one part with two co-located meshes — otherwise there's no
         // way to actually separate the pieces afterward (see Move tool).
         removePartMeshes(activePartId);
+        partMetaRef.current.delete(activePartId);
+
         const upperId = generatePartId();
         const lowerId = generatePartId();
+        partMetaRef.current.set(upperId, { baseGeometry: upper.geometry.clone(), features: [], localOrigin: new THREE.Vector3(0, 0, 0) });
+        partMetaRef.current.set(lowerId, { baseGeometry: lower.geometry.clone(), features: [], localOrigin: new THREE.Vector3(0, 0, 0) });
         addPartMesh(upperId, `${label} (upper)`, upper);
         addPartMesh(lowerId, `${label} (lower)`, lower);
-        bakeGroupTransformToIdentity();
+
         updateParts();
         useAppStore.getState().setSelectedPartId(upperId);
+        updateDimensions();
         useAppStore.getState().setActiveTool('select');
       },
 
@@ -826,6 +1116,7 @@ export default function Viewport3D() {
       selectPart: (partId) => {
         useAppStore.getState().setSelectedPartId(partId);
         updateSelectedPartPosition();
+        updateDimensions();
       },
 
       movePartTo: (partId, x, y, z) => {
@@ -863,16 +1154,13 @@ export default function Viewport3D() {
       repairSelectedPart: () => {
         const activePartId = getActivePartId();
         if (!activePartId) return;
-        const baked = getBakedPartGeometry(activePartId);
-        if (!baked) return;
+        const mesh = getPartMeshes(activePartId)[0];
+        if (!mesh) return;
         pushHistory();
-        const label = getPartLabel(activePartId) ?? 'Model';
-        const repaired = repairWindingConsistency(baked);
-        const result = new THREE.Mesh(repaired, materialRef.current);
-        result.name = 'ModelPiece';
-        replacePartMeshes(activePartId, label, [result]);
-        bakeGroupTransformToIdentity();
-        recordMeshIssues(activePartId, label, repaired);
+        const repaired = repairWindingConsistency(mesh.geometry);
+        setPartGeometry(activePartId, repaired, true);
+        recordMeshIssues(activePartId, getPartLabel(activePartId) ?? 'Model', repaired);
+        updateDimensions();
       },
 
       undo: () => {
@@ -891,6 +1179,145 @@ export default function Viewport3D() {
         restoreSnapshot(next);
         historyCoalesceKeyRef.current = null;
         syncUndoRedoFlags();
+      },
+
+      setHoleOffset: (axis, value) => {
+        const { targetPartId, point, normal } = useAppStore.getState().hole;
+        if (!targetPartId || !point) return;
+        const mesh = getPartMeshes(targetPartId)[0];
+        const meta = getPartMeta(targetPartId);
+        if (!mesh || !meta) return;
+        const currentLocal = toLocalPoint(mesh, new THREE.Vector3(...point));
+        currentLocal[axis] = meta.localOrigin[axis] + value;
+        const worldPoint = toWorldPoint(mesh, currentLocal);
+        useAppStore.getState().setHole({ point: toTuple3(worldPoint) });
+        updatePlacementReadouts('hole', mesh, worldPoint, targetPartId);
+        const n = normal ? new THREE.Vector3(...normal) : new THREE.Vector3(0, 0, 1);
+        updateCutterPreview(worldPoint, n);
+        showCenterlines(mesh, n);
+      },
+
+      setPrimitiveOffset: (axis, value) => {
+        const { targetPartId, point, normal } = useAppStore.getState().primitive;
+        if (!targetPartId || !point) return;
+        const mesh = getPartMeshes(targetPartId)[0];
+        const meta = getPartMeta(targetPartId);
+        if (!mesh || !meta) return;
+        const currentLocal = toLocalPoint(mesh, new THREE.Vector3(...point));
+        currentLocal[axis] = meta.localOrigin[axis] + value;
+        const worldPoint = toWorldPoint(mesh, currentLocal);
+        useAppStore.getState().setPrimitive({ point: toTuple3(worldPoint) });
+        updatePlacementReadouts('primitive', mesh, worldPoint, targetPartId);
+        const n = normal ? new THREE.Vector3(...normal) : new THREE.Vector3(0, 0, 1);
+        updateCutterPreview(worldPoint, n);
+        showCenterlines(mesh, n);
+      },
+
+      editFeature: (partId, featureId) => {
+        const meta = getPartMeta(partId);
+        const mesh = getPartMeshes(partId)[0];
+        const feature = meta?.features.find((f) => f.id === featureId);
+        if (!meta || !mesh || !feature) return;
+
+        const worldPoint = toWorldPoint(mesh, new THREE.Vector3(...feature.point));
+        const worldNormal = toWorldNormal(mesh, new THREE.Vector3(...feature.normal));
+
+        clearPreview();
+        useAppStore.getState().setSelectedFeatureId(featureId);
+
+        if (feature.type === 'hole') {
+          useAppStore.getState().setActiveTool('hole');
+          useAppStore.getState().setHole({
+            placed: true,
+            diameter: feature.diameter,
+            depth: feature.depth,
+            threadId: feature.threadId,
+            point: toTuple3(worldPoint),
+            normal: toTuple3(worldNormal),
+            targetPartId: partId,
+            editingFeatureId: featureId,
+            locked: feature.locked,
+          });
+        } else {
+          useAppStore.getState().setActiveTool('primitive');
+          useAppStore.getState().setPrimitive({
+            placed: true,
+            shape: feature.shape,
+            operation: feature.operation,
+            width: feature.width,
+            depth: feature.depth,
+            height: feature.height,
+            diameter: feature.diameter,
+            innerDiameter: feature.innerDiameter,
+            threadId: feature.threadId,
+            point: toTuple3(worldPoint),
+            normal: toTuple3(worldNormal),
+            targetPartId: partId,
+            editingFeatureId: featureId,
+            locked: feature.locked,
+          });
+        }
+
+        updateCutterPreview(worldPoint, worldNormal);
+        showCenterlines(mesh, worldNormal);
+        updatePlacementReadouts(feature.type, mesh, worldPoint, partId);
+      },
+
+      cancelEditFeature: () => {
+        clearPreview();
+        clearCenterlines();
+        useAppStore.getState().resetHole();
+        useAppStore.getState().resetPrimitivePlacement();
+        useAppStore.getState().setSelectedFeatureId(null);
+        useAppStore.getState().setActiveTool('select');
+      },
+
+      deleteFeature: (partId, featureId) => {
+        const meta = getPartMeta(partId);
+        if (!meta) return;
+        pushHistory();
+        meta.features = meta.features.filter((f) => f.id !== featureId);
+        rebuildPart(partId);
+        if (useAppStore.getState().selectedFeatureId === featureId) {
+          useAppStore.getState().setSelectedFeatureId(null);
+          if (useAppStore.getState().activeTool === 'hole' || useAppStore.getState().activeTool === 'primitive') {
+            actions.cancelEditFeature();
+          }
+        }
+      },
+
+      toggleFeatureLock: (partId, featureId) => {
+        const meta = getPartMeta(partId);
+        const feature = meta?.features.find((f) => f.id === featureId);
+        if (!meta || !feature) return;
+        feature.locked = !feature.locked;
+        syncPartFeaturesToStore(partId);
+        if (useAppStore.getState().selectedFeatureId === featureId) {
+          if (useAppStore.getState().activeTool === 'hole') useAppStore.getState().setHole({ locked: feature.locked });
+          if (useAppStore.getState().activeTool === 'primitive') useAppStore.getState().setPrimitive({ locked: feature.locked });
+        }
+      },
+
+      beginPickLocalOrigin: (partId) => {
+        useAppStore.getState().setPickingOrigin(true, partId);
+      },
+
+      cancelPickLocalOrigin: () => {
+        useAppStore.getState().setPickingOrigin(false, null);
+      },
+
+      resetLocalOrigin: (partId) => {
+        const meta = getPartMeta(partId);
+        if (!meta) return;
+        meta.localOrigin.set(0, 0, 0);
+        updateParts();
+      },
+
+      setLocalOrigin: (partId, x, y, z) => {
+        const meta = getPartMeta(partId);
+        if (!meta) return;
+        meta.localOrigin.set(x, y, z);
+        updateParts();
       },
     };
 
@@ -970,9 +1397,13 @@ export default function Viewport3D() {
     return unsub;
   }, []);
 
-  // ---- reactive: live cutter preview size while adjusting sliders ---
+  // ---- reactive: live cutter preview size + centerline cleanup on tool switch --
   useEffect(() => {
     const unsub = useAppStore.subscribe((state) => {
+      if (state.activeTool !== 'hole' && state.activeTool !== 'primitive') {
+        clearCenterlines();
+        return;
+      }
       const preview = previewMeshRef.current;
       if (!preview) return;
       if (state.activeTool === 'hole' && state.hole.placed && preview.name === 'HoleCutterPreview') {

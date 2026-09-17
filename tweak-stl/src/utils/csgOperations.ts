@@ -191,6 +191,71 @@ export function positionCutterAtSurface(
   mesh.position.addScaledVector(normal.clone().normalize(), signedShift);
 }
 
+export interface CompositeFeature {
+  type: 'hole' | 'primitive';
+  point: [number, number, number];
+  normal: [number, number, number];
+  diameter: number;
+  depth: number;
+  threadId: string | null;
+  shape: 'box' | 'cylinder' | 'washer';
+  operation: 'union' | 'subtract';
+  width: number;
+  height: number;
+  innerDiameter: number;
+}
+
+/**
+ * Composites an ordered list of Hole/Primitive features onto a base
+ * geometry, entirely in that geometry's own LOCAL frame — no world matrices
+ * involved. Because every feature's point/normal are stored in this same
+ * stable local frame, this is safe to re-run from scratch any time a
+ * feature is added, edited, deleted, or a part is reloaded from undo
+ * history, regardless of how the part itself has since been moved, rotated,
+ * or scaled in the scene.
+ */
+export function rebuildCompositeGeometry(
+  baseGeometry: THREE.BufferGeometry,
+  features: CompositeFeature[],
+  resolveThreadOpts: (threadId: string | null, isInternal: boolean) => ThreadRenderOptions,
+  material: THREE.Material | THREE.Material[],
+): THREE.BufferGeometry {
+  let current = normalizeForCSG(baseGeometry);
+
+  for (const f of features) {
+    const point = new THREE.Vector3(...f.point);
+    const normal = new THREE.Vector3(...f.normal);
+    const isHole = f.type === 'hole';
+    const length = isHole ? f.depth : f.height;
+    const mode: 'subtract' | 'union' = isHole || f.operation === 'subtract' ? 'subtract' : 'union';
+
+    const toolMesh = isHole
+      ? createHoleCutterMesh(f.diameter, f.depth, resolveThreadOpts(f.threadId, true))
+      : createPrimitiveMesh(f.shape, f, resolveThreadOpts(f.threadId, f.operation === 'subtract'));
+    positionCutterAtSurface(toolMesh, point, normal, length, mode);
+    toolMesh.updateMatrix();
+
+    const targetBrush = new Brush(current, material as THREE.Material);
+    targetBrush.matrixAutoUpdate = false;
+    targetBrush.matrix.identity();
+    targetBrush.updateMatrixWorld(true);
+
+    const toolBrush = new Brush(normalizeForCSG(toolMesh.geometry), material as THREE.Material);
+    toolBrush.matrix.copy(toolMesh.matrix);
+    toolBrush.matrixAutoUpdate = false;
+    toolBrush.updateMatrixWorld(true);
+
+    const op = mode === 'subtract' ? SUBTRACTION : ADDITION;
+    const result = evaluator.evaluate(targetBrush, toolBrush, op);
+    current = result.geometry;
+  }
+
+  current.computeVertexNormals();
+  current.computeBoundingBox();
+  current.computeBoundingSphere();
+  return current;
+}
+
 /** Splits a mesh into two halves along an axis-aligned plane using CSG. */
 export function planeCutMesh(
   target: THREE.Mesh,

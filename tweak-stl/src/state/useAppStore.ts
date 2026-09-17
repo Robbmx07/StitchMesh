@@ -6,6 +6,7 @@ export type PrimitiveShape = 'box' | 'cylinder' | 'washer';
 export type PrimitiveOp = 'union' | 'subtract';
 export type PlaneAxis = 'x' | 'y' | 'z';
 export type OrthoView = 'top' | 'front' | 'side' | 'iso';
+export type FeatureType = 'hole' | 'primitive';
 
 export interface Dimensions {
   x: number;
@@ -24,6 +25,13 @@ export interface HoleToolState {
   threadId: string | null;
   /** Which part was actually clicked — determined automatically by the raycast hit, not user-picked. */
   targetPartId: string | null;
+  /** Offset of `point` from the target part's own center, on all 3 axes — shown as a reference readout. */
+  centerOffset: [number, number, number] | null;
+  /** Offset of `point` from the target part's user-defined local origin — editable, drives numeric placement. */
+  localOffset: [number, number, number] | null;
+  /** Set while editing an existing feature (from the Parts panel) instead of placing a new one. */
+  editingFeatureId: string | null;
+  locked: boolean;
 }
 
 export interface PrimitiveToolState {
@@ -41,6 +49,10 @@ export interface PrimitiveToolState {
   threadId: string | null;
   /** Which part was actually clicked — determined automatically by the raycast hit, not user-picked. */
   targetPartId: string | null;
+  centerOffset: [number, number, number] | null;
+  localOffset: [number, number, number] | null;
+  editingFeatureId: string | null;
+  locked: boolean;
 }
 
 export interface PlaneCutState {
@@ -64,10 +76,37 @@ export interface MeasureToolState {
   point: [number, number, number] | null;
 }
 
-/** One independent object in the scene (the loaded model, or an added part). */
+/** One independent object in the scene (the loaded model, or an added part) — its own movable/scalable layer. */
 export interface PartInfo {
   id: string;
   label: string;
+  /** User-defined reference point, in the part's own stable local frame (default 0,0,0 = its centroid). */
+  localOrigin: [number, number, number];
+}
+
+/**
+ * One non-destructive Hole/Primitive operation applied to a part — its own
+ * editable "layer" within that part, stored in the part's local frame so it
+ * stays correct regardless of how the part has been moved/rotated/scaled.
+ */
+export interface PartFeature {
+  id: string;
+  type: FeatureType;
+  label: string;
+  /** Prevents further edits (including diameter/thread) until unlocked. */
+  locked: boolean;
+  point: [number, number, number];
+  normal: [number, number, number];
+  diameter: number;
+  /** Hole extrusion depth. */
+  depth: number;
+  threadId: string | null;
+  shape: PrimitiveShape;
+  operation: PrimitiveOp;
+  width: number;
+  /** Primitive extrusion length (cylinder/washer height, or the box's Z dimension). */
+  height: number;
+  innerDiameter: number;
 }
 
 export interface MeshIssues {
@@ -113,6 +152,20 @@ export interface ViewportActions {
   repairSelectedPart: () => void;
   undo: () => void;
   redo: () => void;
+
+  /** Sets a part's numeric offset from its own local origin along one axis, moving the pending hole/primitive placement. */
+  setHoleOffset: (axis: PlaneAxis, value: number) => void;
+  setPrimitiveOffset: (axis: PlaneAxis, value: number) => void;
+  /** Loads an existing feature's params into the Hole/Primitive panel for editing. */
+  editFeature: (partId: string, featureId: string) => void;
+  cancelEditFeature: () => void;
+  deleteFeature: (partId: string, featureId: string) => void;
+  toggleFeatureLock: (partId: string, featureId: string) => void;
+
+  beginPickLocalOrigin: (partId: string) => void;
+  cancelPickLocalOrigin: () => void;
+  resetLocalOrigin: (partId: string) => void;
+  setLocalOrigin: (partId: string, x: number, y: number, z: number) => void;
 }
 
 interface AppState {
@@ -145,6 +198,14 @@ interface AppState {
   selectedPartId: string | null;
   /** World position of the currently selected part, for the Move panel's live fields. */
   selectedPartPosition: [number, number, number] | null;
+  /** Feature ("layer") list per part id, newest-applied last. */
+  partFeatures: Record<string, PartFeature[]>;
+  selectedFeatureId: string | null;
+  partsPanelCollapsed: boolean;
+  /** True while waiting for a viewport click to set a part's local origin. */
+  pickingOrigin: boolean;
+  pickingOriginPartId: string | null;
+
   meshIssues: MeshIssues[];
 
   canUndo: boolean;
@@ -177,6 +238,10 @@ interface AppState {
   setParts: (parts: PartInfo[]) => void;
   setSelectedPartId: (id: string | null) => void;
   setSelectedPartPosition: (position: [number, number, number] | null) => void;
+  setPartFeatures: (partId: string, features: PartFeature[]) => void;
+  setSelectedFeatureId: (id: string | null) => void;
+  setPartsPanelCollapsed: (collapsed: boolean) => void;
+  setPickingOrigin: (on: boolean, partId?: string | null) => void;
   setMeshIssues: (issues: MeshIssues[]) => void;
   dismissMeshIssue: (partId: string) => void;
   setCanUndoRedo: (canUndo: boolean, canRedo: boolean) => void;
@@ -190,6 +255,10 @@ const defaultHole: HoleToolState = {
   normal: null,
   threadId: null,
   targetPartId: null,
+  centerOffset: null,
+  localOffset: null,
+  editingFeatureId: null,
+  locked: false,
 };
 
 const defaultPrimitive: PrimitiveToolState = {
@@ -205,6 +274,10 @@ const defaultPrimitive: PrimitiveToolState = {
   normal: null,
   threadId: null,
   targetPartId: null,
+  centerOffset: null,
+  localOffset: null,
+  editingFeatureId: null,
+  locked: false,
 };
 
 const defaultPlaneCut: PlaneCutState = {
@@ -253,6 +326,11 @@ export const useAppStore = create<AppState>((set) => ({
   parts: [],
   selectedPartId: null,
   selectedPartPosition: null,
+  partFeatures: {},
+  selectedFeatureId: null,
+  partsPanelCollapsed: false,
+  pickingOrigin: false,
+  pickingOriginPartId: null,
   meshIssues: [],
 
   canUndo: false,
@@ -281,6 +359,7 @@ export const useAppStore = create<AppState>((set) => ({
           ? state.primitive
           : { ...defaultPrimitive, shape: state.primitive.shape, operation: state.primitive.operation, threadId: state.primitive.threadId },
       measure: tool === 'measure' ? state.measure : { ...defaultMeasure },
+      selectedFeatureId: tool === 'hole' || tool === 'primitive' ? state.selectedFeatureId : null,
     })),
 
   setTransform: (partial) => set((state) => ({ transform: { ...state.transform, ...partial } })),
@@ -291,7 +370,7 @@ export const useAppStore = create<AppState>((set) => ({
   setPrimitive: (partial) => set((state) => ({ primitive: { ...state.primitive, ...partial } })),
   resetPrimitivePlacement: () =>
     set((state) => ({
-      primitive: { ...state.primitive, placed: false, point: null, normal: null },
+      primitive: { ...state.primitive, placed: false, point: null, normal: null, editingFeatureId: null },
     })),
 
   setPlaneCut: (partial) => set((state) => ({ planeCut: { ...state.planeCut, ...partial } })),
@@ -300,6 +379,10 @@ export const useAppStore = create<AppState>((set) => ({
   setParts: (parts) => set({ parts }),
   setSelectedPartId: (id) => set({ selectedPartId: id }),
   setSelectedPartPosition: (position) => set({ selectedPartPosition: position }),
+  setPartFeatures: (partId, features) => set((state) => ({ partFeatures: { ...state.partFeatures, [partId]: features } })),
+  setSelectedFeatureId: (id) => set({ selectedFeatureId: id }),
+  setPartsPanelCollapsed: (collapsed) => set({ partsPanelCollapsed: collapsed }),
+  setPickingOrigin: (on, partId = null) => set({ pickingOrigin: on, pickingOriginPartId: on ? partId : null }),
   setMeshIssues: (issues) => set({ meshIssues: issues }),
   dismissMeshIssue: (partId) => set((state) => ({ meshIssues: state.meshIssues.filter((i) => i.partId !== partId) })),
   setCanUndoRedo: (canUndo, canRedo) => set({ canUndo, canRedo }),

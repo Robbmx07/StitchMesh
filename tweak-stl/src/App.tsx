@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { UploadCloud } from 'lucide-react';
 import Toolbar from '@/components/Toolbar';
 import Sidebar from '@/components/Sidebar';
+import PartsPanel from '@/components/PartsPanel';
 import Viewport3D from '@/components/Viewport3D';
 import { useAppStore } from '@/state/useAppStore';
 
@@ -35,6 +36,7 @@ export default function App() {
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-base-950">
       <Toolbar />
       <div className="flex min-h-0 flex-1">
+        <PartsPanel />
         <div
           className="relative min-w-0 flex-1"
           onDragOver={handleDragOver}
