@@ -3,12 +3,17 @@ import {
   AlertTriangle,
   Box,
   Download,
+  FilePlus2,
   FolderOpen,
   Grid3x3,
   Layers,
   Printer,
+  Redo2,
+  RotateCcw,
   Sparkles,
   SquareStack,
+  Undo2,
+  X,
 } from 'lucide-react';
 import { useAppStore, type OrthoView } from '@/state/useAppStore';
 import { PRINTER_PROFILES, GENERIC_PRINTER_ID } from '@/utils/printerProfiles';
@@ -22,6 +27,7 @@ const ORTHO_VIEWS: { id: OrthoView; label: string }[] = [
 
 export default function Toolbar() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const addPartInputRef = useRef<HTMLInputElement | null>(null);
   const {
     fileName,
     hasModel,
@@ -36,6 +42,10 @@ export default function Toolbar() {
     printerProfileId,
     printerProfileConfirmed,
     setPrinterProfileId,
+    canUndo,
+    canRedo,
+    meshIssues,
+    dismissMeshIssue,
   } = useAppStore();
 
   const handleOpenClick = async () => {
@@ -60,6 +70,27 @@ export default function Toolbar() {
     event.target.value = '';
   };
 
+  const handleAddPartClick = () => {
+    addPartInputRef.current?.click();
+  };
+
+  const handleAddPartInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    file.arrayBuffer().then((buffer) => {
+      viewportActions?.importAdditionalPart(buffer, file.name);
+    });
+    event.target.value = '';
+  };
+
+  const handleNewClick = () => {
+    if (hasModel) {
+      const proceed = window.confirm('Start a new model? This clears the current model, all parts, and undo history.');
+      if (!proceed) return;
+    }
+    viewportActions?.newModel();
+  };
+
   const handleExportClick = () => {
     if (!printerProfileConfirmed) {
       const proceed = window.confirm(
@@ -73,7 +104,7 @@ export default function Toolbar() {
   };
 
   return (
-    <div className="flex h-14 shrink-0 items-center gap-3 border-b border-base-700 bg-base-900 px-4">
+    <div className="flex h-14 shrink-0 items-center gap-3 overflow-x-auto border-b border-base-700 bg-base-900 px-4">
       <div className="flex items-center gap-2 pr-3">
         <SquareStack className="h-5 w-5 text-accent-500" />
         <span className="text-sm font-semibold tracking-wide text-slate-100">StitchMesh</span>
@@ -87,10 +118,32 @@ export default function Toolbar() {
       </button>
       <input ref={fileInputRef} type="file" accept=".stl" className="hidden" onChange={handleFileInputChange} />
 
+      <button className="btn" title="Add another part to the scene" onClick={handleAddPartClick}>
+        <FilePlus2 className="h-4 w-4" />
+        <span>Add Part</span>
+      </button>
+      <input ref={addPartInputRef} type="file" accept=".stl" className="hidden" onChange={handleAddPartInputChange} />
+
       <button className="btn" onClick={handleExportClick} disabled={!hasModel}>
         <Download className="h-4 w-4" />
         <span>Export STL</span>
       </button>
+
+      <button className="btn" title="Clear the current model" onClick={handleNewClick} disabled={!hasModel}>
+        <RotateCcw className="h-4 w-4" />
+        <span>New</span>
+      </button>
+
+      <div className="h-6 w-px bg-base-700" />
+
+      <div className="flex items-center gap-1">
+        <button className="btn-icon" title="Undo (Ctrl+Z)" disabled={!canUndo} onClick={() => viewportActions?.undo()}>
+          <Undo2 className="h-4 w-4" />
+        </button>
+        <button className="btn-icon" title="Redo (Ctrl+Y)" disabled={!canRedo} onClick={() => viewportActions?.redo()}>
+          <Redo2 className="h-4 w-4" />
+        </button>
+      </div>
 
       <div className="h-6 w-px bg-base-700" />
 
@@ -162,6 +215,21 @@ export default function Toolbar() {
       </div>
 
       <div className="ml-auto flex items-center gap-3">
+        {meshIssues.map((issue) => (
+          <div
+            key={issue.partId}
+            className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-amber-600 bg-amber-600/10 px-2 py-1 text-xs text-amber-400"
+            title={`${issue.partLabel}: ${issue.boundaryEdgeCount} open edge(s) (possible holes), ${issue.nonManifoldEdgeCount} non-manifold edge(s). These aren't auto-fixed — features may behave unexpectedly near them.`}
+          >
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              {issue.partLabel}: {issue.boundaryEdgeCount} open edge(s)
+            </span>
+            <button className="text-amber-300 hover:text-amber-100" onClick={() => dismissMeshIssue(issue.partId)}>
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
         {fileName && (
           <span className="flex items-center gap-1.5 text-xs text-slate-400">
             <Sparkles className="h-3.5 w-3.5 text-accent-500" />

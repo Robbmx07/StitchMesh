@@ -1,5 +1,5 @@
 import { ChangeEvent, useEffect } from 'react';
-import { Circle, Info, Scissors, Scale, SquarePlus } from 'lucide-react';
+import { Circle, FlipHorizontal2, Info, Move, Ruler, Scissors, Scale, SquarePlus } from 'lucide-react';
 import {
   useAppStore,
   type PlaneAxis,
@@ -16,7 +16,34 @@ const TOOL_TABS: { id: ToolId; label: string; icon: typeof Info }[] = [
   { id: 'hole', label: 'Hole', icon: Circle },
   { id: 'primitive', label: 'Primitive', icon: SquarePlus },
   { id: 'planeCut', label: 'Cut', icon: Scissors },
+  { id: 'move', label: 'Move', icon: Move },
+  { id: 'measure', label: 'Measure', icon: Ruler },
 ];
+
+/** Dropdown for picking which independent object a tool acts on — hidden when there's only one. */
+function PartSelector() {
+  const parts = useAppStore((s) => s.parts);
+  const selectedPartId = useAppStore((s) => s.selectedPartId);
+  const viewportActions = useAppStore((s) => s.viewportActions);
+  if (parts.length <= 1) return null;
+
+  return (
+    <div className="field-row">
+      <label className="text-sm text-slate-300">Part</label>
+      <select
+        className="w-40 rounded border border-base-600 bg-base-900 px-2 py-1 text-sm text-slate-200 outline-none focus:border-accent-500"
+        value={selectedPartId ?? ''}
+        onChange={(e) => viewportActions?.selectPart(e.target.value)}
+      >
+        {parts.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
 
 function NumberField({
   label,
@@ -202,6 +229,36 @@ function TransformPanel() {
             </div>
           ))}
         </div>
+
+        <div className="field-row pt-2">
+          <label className="text-sm text-slate-300">Free angle</label>
+          <div className="flex items-center gap-1">
+            <select
+              className="rounded border border-base-600 bg-base-900 px-1.5 py-1 text-sm text-slate-200 outline-none focus:border-accent-500"
+              value={transform.freeRotateAxis}
+              onChange={(e) => setTransform({ freeRotateAxis: e.target.value as 'x' | 'y' | 'z' })}
+            >
+              <option value="x">X</option>
+              <option value="y">Y</option>
+              <option value="z">Z</option>
+            </select>
+            <input
+              type="number"
+              className="num-input"
+              value={transform.freeRotateDegrees}
+              step={1}
+              onChange={(e) => setTransform({ freeRotateDegrees: parseFloat(e.target.value) || 0 })}
+            />
+            <span className="text-xs text-slate-500">°</span>
+          </div>
+        </div>
+        <button
+          className="btn w-full"
+          disabled={!hasModel || transform.freeRotateDegrees === 0}
+          onClick={() => viewportActions?.rotateBy(transform.freeRotateAxis, transform.freeRotateDegrees)}
+        >
+          Rotate
+        </button>
       </div>
 
       <div className="panel-section space-y-2">
@@ -213,13 +270,32 @@ function TransformPanel() {
           Drop to Build Plate
         </button>
       </div>
+
+      <div className="panel-section space-y-2">
+        <div className="panel-label">Mirror</div>
+        <div className="grid grid-cols-3 gap-2">
+          {(['x', 'y', 'z'] as const).map((axis) => (
+            <button
+              key={axis}
+              className="btn flex items-center justify-center gap-1"
+              disabled={!hasModel}
+              onClick={() => viewportActions?.mirror(axis)}
+            >
+              <FlipHorizontal2 className="h-3.5 w-3.5" />
+              {axis.toUpperCase()}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-slate-500">Flips the selected part across that axis, through its own center.</p>
+      </div>
     </div>
   );
 }
 
 function HolePanel() {
-  const { hole, hasModel, setHole, viewportActions } = useAppStore();
+  const { hole, hasModel, parts, setHole, viewportActions } = useAppStore();
   const selectedThread = findThreadStandard(hole.threadId);
+  const targetLabel = parts.length > 1 ? parts.find((p) => p.id === hole.targetPartId)?.label : null;
 
   const handleThreadChange = (id: string | null) => {
     const thread = findThreadStandard(id);
@@ -246,6 +322,7 @@ function HolePanel() {
           />
           <NumberField label="Depth" value={hole.depth} step={0.5} min={0.1} onChange={(v) => setHole({ depth: v })} />
           {selectedThread && <p className="text-xs text-slate-500">Cuts a standard internal (tapped) thread.</p>}
+          {targetLabel && <p className="text-xs text-slate-500">Targeting: {targetLabel}</p>}
           <div className="flex gap-2 pt-1">
             <button className="btn-primary flex-1" onClick={() => viewportActions?.applyHoleSubtract()}>
               Apply Boolean Subtract
@@ -272,8 +349,9 @@ const PRIMITIVE_OPS: { id: PrimitiveOp; label: string }[] = [
 ];
 
 function PrimitivePanel() {
-  const { primitive, hasModel, setPrimitive, viewportActions } = useAppStore();
+  const { primitive, hasModel, parts, setPrimitive, viewportActions } = useAppStore();
   const selectedThread = findThreadStandard(primitive.threadId);
+  const targetLabel = parts.length > 1 ? parts.find((p) => p.id === primitive.targetPartId)?.label : null;
 
   const handleThreadChange = (id: string | null) => {
     const thread = findThreadStandard(id);
@@ -351,6 +429,8 @@ function PrimitivePanel() {
             </>
           )}
 
+          {targetLabel && <p className="text-xs text-slate-500">Targeting: {targetLabel}</p>}
+
           {!primitive.placed ? (
             <p className="pt-1 text-sm text-slate-400">Click a point on the model to place the primitive.</p>
           ) : (
@@ -394,6 +474,7 @@ function PlaneCutPanel() {
         <p className="text-sm text-slate-500">Load a model first.</p>
       ) : (
         <>
+          <PartSelector />
           <div className="grid grid-cols-3 gap-1">
             {PLANE_AXES.map((a) => (
               <button
@@ -422,13 +503,138 @@ function PlaneCutPanel() {
   );
 }
 
+function MovePanel() {
+  const { hasModel, parts, selectedPartId, selectedPartPosition, snapToGrid, snapGridSizeMM, setSnapToGrid, viewportActions } = useAppStore();
+
+  if (!hasModel) {
+    return (
+      <div className="panel-section">
+        <div className="panel-label">Move</div>
+        <p className="text-sm text-slate-500">Load a model first.</p>
+      </div>
+    );
+  }
+
+  const position = selectedPartPosition ?? [0, 0, 0];
+  const nudgeAmount = snapToGrid ? snapGridSizeMM : 1;
+
+  const handlePositionChange = (axisIndex: 0 | 1 | 2, value: number) => {
+    if (!selectedPartId) return;
+    const next: [number, number, number] = [...position] as [number, number, number];
+    next[axisIndex] = value;
+    viewportActions?.movePartTo(selectedPartId, next[0], next[1], next[2]);
+  };
+
+  return (
+    <div className="panel-section space-y-3">
+      <div className="panel-label">Move</div>
+      <PartSelector />
+      {parts.length <= 1 && (
+        <p className="text-xs text-slate-500">
+          Only one part in the scene — Plane Cut produces two independently movable parts, or use Primitive to add another part.
+        </p>
+      )}
+      <NumberField label="Position X" value={position[0]} step={0.5} onChange={(v) => handlePositionChange(0, v)} />
+      <NumberField label="Position Y" value={position[1]} step={0.5} onChange={(v) => handlePositionChange(1, v)} />
+      <NumberField label="Position Z" value={position[2]} step={0.5} onChange={(v) => handlePositionChange(2, v)} />
+
+      <div className="field-row">
+        <label className="text-sm text-slate-300">Snap to grid</label>
+        <input type="checkbox" checked={snapToGrid} onChange={(e) => setSnapToGrid(e.target.checked)} />
+      </div>
+      {snapToGrid && <p className="text-right text-xs text-slate-500">{snapGridSizeMM} mm grid</p>}
+
+      <div className="grid grid-cols-3 gap-2 pt-1">
+        {(['x', 'y', 'z'] as const).map((axis) => (
+          <div key={axis} className="flex flex-col items-center gap-1">
+            <span className="text-xs uppercase text-slate-500">{axis}</span>
+            <div className="flex gap-1">
+              <button
+                className="btn"
+                disabled={!selectedPartId}
+                onClick={() => selectedPartId && viewportActions?.nudgePart(selectedPartId, axis, -nudgeAmount)}
+              >
+                −
+              </button>
+              <button
+                className="btn"
+                disabled={!selectedPartId}
+                onClick={() => selectedPartId && viewportActions?.nudgePart(selectedPartId, axis, nudgeAmount)}
+              >
+                +
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MeasurePanel() {
+  const { hasModel, measure, viewportActions } = useAppStore();
+
+  if (!hasModel) {
+    return (
+      <div className="panel-section">
+        <div className="panel-label">Measure</div>
+        <p className="text-sm text-slate-500">Load a model first.</p>
+      </div>
+    );
+  }
+
+  const { datum, point } = measure;
+  let distance: number | null = null;
+  let delta: [number, number, number] | null = null;
+  if (datum && point) {
+    delta = [point[0] - datum[0], point[1] - datum[1], point[2] - datum[2]];
+    distance = Math.sqrt(delta[0] ** 2 + delta[1] ** 2 + delta[2] ** 2);
+  }
+
+  return (
+    <div className="panel-section space-y-3">
+      <div className="panel-label">Measure</div>
+      {!datum ? (
+        <p className="text-sm text-slate-400">Click a point on the model to set the datum (reference origin).</p>
+      ) : !point ? (
+        <>
+          <p className="text-xs text-slate-500">Datum: {datum.map((v) => v.toFixed(2)).join(', ')} mm</p>
+          <p className="text-sm text-slate-400">Click another point to measure from the datum.</p>
+        </>
+      ) : (
+        <>
+          <p className="text-xs text-slate-500">Datum: {datum.map((v) => v.toFixed(2)).join(', ')} mm</p>
+          <div className="rounded-md border border-base-700 bg-base-900 p-3 text-center">
+            <div className="text-[10px] uppercase tracking-wide text-slate-500">Distance</div>
+            <div className="text-lg font-semibold text-slate-100">{distance!.toFixed(3)} mm</div>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            {(['ΔX', 'ΔY', 'ΔZ'] as const).map((label, i) => (
+              <div key={label} className="rounded-md border border-base-700 bg-base-900 py-2">
+                <div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
+                <div className="text-sm font-medium text-slate-200">{delta![i].toFixed(2)}</div>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-slate-500">Click another point to re-measure from the same datum.</p>
+        </>
+      )}
+      {(datum || point) && (
+        <button className="btn w-full" onClick={() => viewportActions?.clearMeasure()}>
+          Reset Datum
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function Sidebar() {
   const activeTool = useAppStore((s) => s.activeTool);
   const setActiveTool = useAppStore((s) => s.setActiveTool);
 
   return (
     <div className="flex h-full w-80 shrink-0 flex-col overflow-y-auto border-l border-base-700 bg-base-900">
-      <div className="flex gap-1 border-b border-base-700 p-2">
+      <div className="flex flex-wrap gap-1 border-b border-base-700 p-2">
         {TOOL_TABS.map((tab) => {
           const Icon = tab.icon;
           return (
@@ -451,6 +657,8 @@ export default function Sidebar() {
       {activeTool === 'hole' && <HolePanel />}
       {activeTool === 'primitive' && <PrimitivePanel />}
       {activeTool === 'planeCut' && <PlaneCutPanel />}
+      {activeTool === 'move' && <MovePanel />}
+      {activeTool === 'measure' && <MeasurePanel />}
     </div>
   );
 }

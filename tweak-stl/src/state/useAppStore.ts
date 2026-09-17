@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { GENERIC_PRINTER_ID } from '@/utils/printerProfiles';
 
-export type ToolId = 'select' | 'transform' | 'hole' | 'primitive' | 'planeCut';
+export type ToolId = 'select' | 'transform' | 'hole' | 'primitive' | 'planeCut' | 'move' | 'measure';
 export type PrimitiveShape = 'box' | 'cylinder' | 'washer';
 export type PrimitiveOp = 'union' | 'subtract';
 export type PlaneAxis = 'x' | 'y' | 'z';
@@ -22,6 +22,8 @@ export interface HoleToolState {
   normal: [number, number, number] | null;
   /** ThreadStandard id, or null for a plain smooth hole. */
   threadId: string | null;
+  /** Which part was actually clicked — determined automatically by the raycast hit, not user-picked. */
+  targetPartId: string | null;
 }
 
 export interface PrimitiveToolState {
@@ -37,6 +39,8 @@ export interface PrimitiveToolState {
   normal: [number, number, number] | null;
   /** ThreadStandard id, or null for a plain smooth cylinder. Only applies to the cylinder shape. */
   threadId: string | null;
+  /** Which part was actually clicked — determined automatically by the raycast hit, not user-picked. */
+  targetPartId: string | null;
 }
 
 export interface PlaneCutState {
@@ -50,6 +54,31 @@ export interface TransformState {
   scaleY: number;
   scaleZ: number;
   uniformScale: boolean;
+  /** Free-angle rotation input (degrees), alongside the ±90° snap buttons. */
+  freeRotateAxis: PlaneAxis;
+  freeRotateDegrees: number;
+}
+
+export interface MeasureToolState {
+  datum: [number, number, number] | null;
+  point: [number, number, number] | null;
+}
+
+/** One independent object in the scene (the loaded model, or an added part). */
+export interface PartInfo {
+  id: string;
+  label: string;
+}
+
+export interface MeshIssues {
+  partId: string;
+  partLabel: string;
+  boundaryEdgeCount: number;
+  nonManifoldEdgeCount: number;
+  inconsistentWindingCount: number;
+  globallyInverted: boolean;
+  /** True if repairWindingConsistency() would change anything (winding/inversion, not holes). */
+  repairable: boolean;
 }
 
 /**
@@ -59,6 +88,8 @@ export interface TransformState {
  */
 export interface ViewportActions {
   loadSTL: (data: ArrayBuffer, fileName: string) => void;
+  importAdditionalPart: (data: ArrayBuffer, fileName: string) => void;
+  newModel: () => void;
   exportSTL: () => void;
   setOrthoView: (view: OrthoView) => void;
   setWireframe: (on: boolean) => void;
@@ -67,6 +98,7 @@ export interface ViewportActions {
   rotateBy: (axis: PlaneAxis, degrees: number) => void;
   centerToOrigin: () => void;
   dropToBuildPlate: () => void;
+  mirror: (axis: PlaneAxis) => void;
   applyHoleSubtract: () => void;
   cancelHolePlacement: () => void;
   applyPrimitive: () => void;
@@ -74,6 +106,13 @@ export interface ViewportActions {
   applyPlaneCut: () => void;
   /** Defaults planeCut.height to the model's current bounding-box center on the given axis, so the default cut isn't a no-op on a build-plate-dropped model. */
   centerPlaneCutHeight: (axis: PlaneAxis) => void;
+  selectPart: (partId: string) => void;
+  movePartTo: (partId: string, x: number, y: number, z: number) => void;
+  nudgePart: (partId: string, axis: PlaneAxis, deltaMM: number) => void;
+  clearMeasure: () => void;
+  repairSelectedPart: () => void;
+  undo: () => void;
+  redo: () => void;
 }
 
 interface AppState {
@@ -86,6 +125,8 @@ interface AppState {
   wireframe: boolean;
   flatShading: boolean;
   showBoundingBox: boolean;
+  snapToGrid: boolean;
+  snapGridSizeMM: number;
 
   /** Target printer profile id (printerProfiles.ts) — tunes thread mesh resolution and internal-thread clearance. */
   printerProfileId: string;
@@ -98,6 +139,16 @@ interface AppState {
   hole: HoleToolState;
   primitive: PrimitiveToolState;
   planeCut: PlaneCutState;
+  measure: MeasureToolState;
+
+  parts: PartInfo[];
+  selectedPartId: string | null;
+  /** World position of the currently selected part, for the Move panel's live fields. */
+  selectedPartPosition: [number, number, number] | null;
+  meshIssues: MeshIssues[];
+
+  canUndo: boolean;
+  canRedo: boolean;
 
   viewportActions: ViewportActions | null;
 
@@ -110,6 +161,7 @@ interface AppState {
   setWireframe: (on: boolean) => void;
   setFlatShading: (on: boolean) => void;
   setShowBoundingBox: (on: boolean) => void;
+  setSnapToGrid: (on: boolean) => void;
   setPrinterProfileId: (id: string) => void;
 
   setActiveTool: (tool: ToolId) => void;
@@ -120,6 +172,14 @@ interface AppState {
   setPrimitive: (partial: Partial<PrimitiveToolState>) => void;
   resetPrimitivePlacement: () => void;
   setPlaneCut: (partial: Partial<PlaneCutState>) => void;
+  setMeasure: (partial: Partial<MeasureToolState>) => void;
+
+  setParts: (parts: PartInfo[]) => void;
+  setSelectedPartId: (id: string | null) => void;
+  setSelectedPartPosition: (position: [number, number, number] | null) => void;
+  setMeshIssues: (issues: MeshIssues[]) => void;
+  dismissMeshIssue: (partId: string) => void;
+  setCanUndoRedo: (canUndo: boolean, canRedo: boolean) => void;
 }
 
 const defaultHole: HoleToolState = {
@@ -129,6 +189,7 @@ const defaultHole: HoleToolState = {
   point: null,
   normal: null,
   threadId: null,
+  targetPartId: null,
 };
 
 const defaultPrimitive: PrimitiveToolState = {
@@ -143,6 +204,7 @@ const defaultPrimitive: PrimitiveToolState = {
   point: null,
   normal: null,
   threadId: null,
+  targetPartId: null,
 };
 
 const defaultPlaneCut: PlaneCutState = {
@@ -156,6 +218,13 @@ const defaultTransform: TransformState = {
   scaleY: 100,
   scaleZ: 100,
   uniformScale: true,
+  freeRotateAxis: 'z',
+  freeRotateDegrees: 0,
+};
+
+const defaultMeasure: MeasureToolState = {
+  datum: null,
+  point: null,
 };
 
 export const useAppStore = create<AppState>((set) => ({
@@ -168,6 +237,8 @@ export const useAppStore = create<AppState>((set) => ({
   wireframe: false,
   flatShading: false,
   showBoundingBox: true,
+  snapToGrid: false,
+  snapGridSizeMM: 1,
   printerProfileId: GENERIC_PRINTER_ID,
   printerProfileConfirmed: false,
 
@@ -177,6 +248,15 @@ export const useAppStore = create<AppState>((set) => ({
   hole: defaultHole,
   primitive: defaultPrimitive,
   planeCut: defaultPlaneCut,
+  measure: defaultMeasure,
+
+  parts: [],
+  selectedPartId: null,
+  selectedPartPosition: null,
+  meshIssues: [],
+
+  canUndo: false,
+  canRedo: false,
 
   viewportActions: null,
 
@@ -189,6 +269,7 @@ export const useAppStore = create<AppState>((set) => ({
   setWireframe: (on) => set({ wireframe: on }),
   setFlatShading: (on) => set({ flatShading: on }),
   setShowBoundingBox: (on) => set({ showBoundingBox: on }),
+  setSnapToGrid: (on) => set({ snapToGrid: on }),
   setPrinterProfileId: (id) => set({ printerProfileId: id, printerProfileConfirmed: true }),
 
   setActiveTool: (tool) =>
@@ -199,6 +280,7 @@ export const useAppStore = create<AppState>((set) => ({
         tool === 'primitive'
           ? state.primitive
           : { ...defaultPrimitive, shape: state.primitive.shape, operation: state.primitive.operation, threadId: state.primitive.threadId },
+      measure: tool === 'measure' ? state.measure : { ...defaultMeasure },
     })),
 
   setTransform: (partial) => set((state) => ({ transform: { ...state.transform, ...partial } })),
@@ -213,4 +295,12 @@ export const useAppStore = create<AppState>((set) => ({
     })),
 
   setPlaneCut: (partial) => set((state) => ({ planeCut: { ...state.planeCut, ...partial } })),
+  setMeasure: (partial) => set((state) => ({ measure: { ...state.measure, ...partial } })),
+
+  setParts: (parts) => set({ parts }),
+  setSelectedPartId: (id) => set({ selectedPartId: id }),
+  setSelectedPartPosition: (position) => set({ selectedPartPosition: position }),
+  setMeshIssues: (issues) => set({ meshIssues: issues }),
+  dismissMeshIssue: (partId) => set((state) => ({ meshIssues: state.meshIssues.filter((i) => i.partId !== partId) })),
+  setCanUndoRedo: (canUndo, canRedo) => set({ canUndo, canRedo }),
 }));
