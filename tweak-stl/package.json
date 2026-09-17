@@ -1,0 +1,50 @@
+{
+  "name": "tweak-stl",
+  "version": "0.1.0",
+  "description": "TweakSTL — Offline 3D print modification tool. Modify, don't model.",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build && electron-builder",
+    "build:web": "tsc -b && vite build",
+    "preview": "vite preview",
+    "electron:build": "electron-builder",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lucide-react": "^0.469.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.171.0",
+    "three-bvh-csg": "^0.0.17",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@types/three": "^0.171.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vite-plugin-electron": "^0.29.0",
+    "vite-plugin-electron-renderer": "^0.14.6"
+  },
+  "build": {
+    "appId": "com.tweakstl.app",
+    "productName": "TweakSTL",
+    "files": [
+      "dist",
+      "dist-electron"
+    ],
+    "directories": {
+      "output": "release"
+    }
+  }
+}
