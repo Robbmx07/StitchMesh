@@ -1,28 +1,31 @@
 # StitchMesh — Complete User Manual
 
 *"Modify, don't model."* StitchMesh is an offline tool for making localized
-edits to an existing `.stl` file — resize a hole, add a threaded boss, cut a
-model in two — without learning a full CAD package. This manual documents
-every function in the app as it exists today, with screenshots of each one
-in use, a validation/accuracy review, and a list of candidate features for
-a future non-advanced/beginner-friendly pass.
+edits to an existing `.stl` file — resize a hole, add a threaded boss, cut
+a model in two and move the pieces apart, measure a clearance — without
+learning a full CAD package.
 
-This document is written to be usable by another AI (or a human) as source
-material for a tutorial video: each section names the exact UI element,
-what it does, what input it expects, and what the result looks like.
+**This document is written for another AI to read alongside a copy of the
+built app (`dist-standalone/index.html`) and produce a tutorial video.**
+Every section names the exact UI element, what it does, what input it
+expects, and shows a real screenshot of the result. Screenshots live in
+`docs/manual-assets/` next to this file.
 
 ---
 
 ## 1. What StitchMesh is
 
-A three-panel desktop/web app: a **toolbar** across the top (file, view,
-printer), a **3D viewport** filling the center, and a **context sidebar** on
-the right whose contents change based on which tool tab is active.
+A three-panel app: a **toolbar** across the top (file, undo/redo, view,
+printer, display toggles), a **3D viewport** filling the center, and a
+**context sidebar** on the right with seven tool tabs whose contents
+change based on which is active: **Info, Transform, Hole, Primitive, Cut,
+Move, Measure**.
 
 ![Empty state](manual-assets/01-empty-state.png)
 
-*Empty state: toolbar across the top, empty dark viewport with a grid and
-axes gizmo, sidebar on the right defaulted to the **Info** tab reporting
+*Empty state. Toolbar across the top (Open STL, Add Part, Export STL, New,
+Undo/Redo, view presets, printer picker, display toggles). Empty dark
+viewport with a grid and axes gizmo. Sidebar defaulted to Info, reporting
 "No model loaded."*
 
 It ships in three forms, all built from the same source:
@@ -33,34 +36,37 @@ It ships in three forms, all built from the same source:
 | Web bundle | `npm run build:web` | Multi-file `dist/` folder; needs a static server |
 | **Standalone** | `npm run build:standalone` | **One `dist-standalone/index.html` file** — double-click it, works fully offline, no install, no server. Import/export fall back to drag-and-drop and browser downloads. |
 
-All screenshots in this manual were captured from the standalone build
-running in a real (non-Electron) browser, offline.
+All screenshots here were captured from the standalone build running in a
+real (non-Electron) browser, fully offline.
 
 ---
 
-## 2. Loading and exporting a model
+## 2. Loading, adding, exporting, and resetting a model
 
-**Import** — either drag an `.stl` file onto the viewport, or click **Open
-STL** in the toolbar (desktop: native file picker; standalone: browser file
-picker). The file is read into memory only — the original file on disk is
-never modified.
+- **Import**: drag an `.stl` onto the viewport, or click **Open STL**
+  (native file picker on desktop, browser picker in standalone). This
+  *replaces* everything currently in the scene. Reading a file never
+  modifies it on disk.
+- **Add Part**: imports another `.stl` as a second, independent object
+  next to the first, rather than replacing it — see §11 (Multiple Objects).
+  If nothing is loaded yet, Add Part behaves exactly like Open STL.
+- **New**: clears the current model (and its undo history). Asks for
+  confirmation first if a model is loaded.
+- **Export STL**: saves the current scene — every part in it — as a new
+  file. Desktop: native Save As dialog. Standalone: a browser download
+  named `<original-name>-modified.stl`. Your source file is never
+  overwritten.
 
-**Export** — click **Export STL** in the toolbar. Desktop: native Save As
-dialog. Standalone: a normal browser download, named
-`<original-name>-modified.stl`. Export always writes a *new* file; your
-source `.stl` is untouched either way.
+**Printer-not-selected export gate**: the first time you click Export STL
+without having picked a printer profile (§14), a dialog interrupts:
+*"No printer selected yet... Click OK to export anyway with Generic, or
+Cancel to pick your printer first."* Accepting confirms Generic so it
+won't ask again.
 
 ![Model imported](manual-assets/02-imported-model.png)
 
-*After import: the model renders in the viewport, the sidebar's Info tab
-shows the file name, and the **Bounding Box** readout (visible on every
-tab) reports live X × Y × Z dimensions in millimeters.*
-
-**Printer-not-selected export gate**: the first time you click Export STL
-without having picked a printer profile (see §9), a confirmation dialog
-interrupts: *"No printer selected yet... Click OK to export anyway with
-Generic, or Cancel to pick your printer first."* Accepting confirms Generic
-and this won't ask again; Cancel backs out so you can pick one.
+*After import: the model renders, and the Bounding Box readout (visible on
+every tab) reports live X × Y × Z dimensions in millimeters.*
 
 ---
 
@@ -69,159 +75,246 @@ and this won't ask again; Cancel backs out so you can pick one.
 - **Orbit**: left-click-drag, or **middle-click-drag**.
 - **Pan**: right-click-drag.
 - **Zoom**: scroll wheel.
-- **Middle-click-drag re-centers on whatever's under the cursor** at the
-  moment you press the button (raycast against the model), rather than
-  orbiting around a fixed point — click near a corner and drag, and the
-  view pivots around that corner instead of the model's center. Left-drag
-  still orbits around the same shared pivot.
-- **View presets** (toolbar): **Top / Front / Side / Iso** jump the camera
-  to a standard orthographic-ish framing of the current model.
+- **Middle-click-drag re-centers on whatever's under the cursor** the
+  moment you press the button, rather than orbiting around a fixed point
+  — click near a corner and drag, and the view pivots around that corner.
+  Left-drag orbits around the same shared pivot.
+- **View presets** (toolbar): **Top / Front / Side / Iso**, or press
+  **1 / 2 / 3 / 4** on the keyboard.
 
-![Top view](manual-assets/03-view-top.png) ![Side view](manual-assets/04-view-side.png)
+![Top view](manual-assets/03-view-top.png)
 
-*Left: **Top** preset. Right: **Side** preset. Both re-frame and re-target
-the camera to the model's current bounding box, so they still work
-sensibly after scaling, rotating, or cutting.*
+*Top preset. Presets re-frame and re-target the camera to the model's
+**current** bounding box, so they stay useful after scaling, moving parts
+apart, or cutting.*
 
-**Display toggles** (toolbar, right of the view presets — three icon
-buttons):
+**Display toggles** (toolbar icons, or keyboard **W** / **B**):
 
-| Icon | Toggle | Effect |
+| Icon / key | Toggle | Effect |
 |---|---|---|
-| Grid | Wireframe | Renders the model as an edge mesh instead of solid |
-| Cube | Flat shading | Switches from smooth (interpolated) to faceted shading — useful for inspecting a mesh's actual triangle density |
-| Layers | Bounding box | Shows/hides the blue box outline around the model (on by default) |
+| Grid icon / `W` | Wireframe | Renders the model as an edge mesh |
+| Cube icon | Flat shading | Faceted instead of smooth shading — shows actual triangle density |
+| Layers icon / `B` | Bounding box | Shows/hides the blue outline (on by default) |
 
-![Wireframe](manual-assets/05-wireframe-on.png) ![Flat shading](manual-assets/06-flat-shading-on.png)
+![Wireframe](manual-assets/04-wireframe.png)
 
-*Left: wireframe on. Right: flat shading on (each triangle facet visibly
-distinct — this is what a coarse or low-poly mesh looks like).*
+*Wireframe on, from the Iso preset.*
 
----
+### Keyboard shortcuts reference
 
-## 4. Transform tool
+| Key | Action |
+|---|---|
+| `Ctrl`/`Cmd` + `Z` | Undo |
+| `Ctrl`/`Cmd` + `Y`, or `Ctrl`/`Cmd` + `Shift` + `Z` | Redo |
+| `1` `2` `3` `4` | Top / Front / Side / Iso |
+| `W` | Toggle wireframe |
+| `B` | Toggle bounding box |
 
-Tab: **Transform**. Affects the whole model.
-
-![Transform panel](manual-assets/07-transform-panel.png)
-
-- **Scale** — X/Y/Z fields show the model's *current* size in mm; typing a
-  new value rescales to that exact size. The **Uniform** checkbox (on by
-  default) keeps all three axes proportional when you edit one field; turn
-  it off to stretch a single axis independently.
-- **Rotate** — six buttons, ±90° snaps around each of X/Y/Z. No free-angle
-  rotation input currently exists (see §12).
-- **Center to Origin** — recenters the model's bounding box at world
-  (0,0,0) on all three axes.
-- **Drop to Build Plate** — shifts the model in Z only so its lowest point
-  sits exactly at Z=0, without moving X/Y. This runs automatically once on
-  import too.
-
-![Scaled model](manual-assets/08-transform-scaled.png)
-
-*The 20mm test cube after typing 35 into the Width field with Uniform
-scaling on — X/Y/Z all grew proportionally to 35mm.*
+Shortcuts are suppressed while typing in any text field or dropdown.
 
 ---
 
-## 5. Hole Modifier
+## 4. Undo / Redo
 
-Tab: **Hole**. Cuts a cylindrical (or threaded) hole into the model at a
-point you click.
+Toolbar: the two curved-arrow icons next to New, or `Ctrl+Z` / `Ctrl+Y`.
+Every committed change is undoable: Hole/Primitive/Plane Cut apply,
+Transform actions (scale, rotate, center, drop, mirror), Move, adding a
+part, and mesh repair. Continuous edits (typing digits into a Scale or
+Move field) are coalesced into a single undo step per edit session rather
+than one step per keystroke; discrete actions (a button click) are always
+their own step.
 
-**Workflow**: click **Hole** → click a point on the model's surface → the
-sidebar now shows Diameter, Depth, and (once a size is chosen) Thread
-fields, plus **Apply Boolean Subtract** / **Cancel**.
+![Before undo](manual-assets/05a-before-undo.png) ![After undo](manual-assets/05b-after-undo.png)
 
-![Hole placed, smooth](manual-assets/09-hole-placed-smooth.png)
-
-*A cutter (translucent blue cylinder) placed on the front face after one
-click. It's oriented to the surface normal automatically — no manual
-aiming needed.*
-
-- **Diameter** / **Depth** (mm) — free-typed when **Thread** is set to
-  "Smooth (no thread)".
-- **Thread** — a dropdown of standard hardware sizes (§8). Picking one
-  locks Diameter to that thread's exact major diameter (shown grayed out)
-  and switches the cutter from a smooth cylinder to a real helical
-  thread profile.
-
-![Threaded hole selected](manual-assets/10-hole-threaded-selected.png)
-
-*3/8-16 UNC selected: Diameter now reads the thread's major diameter
-(9.525mm) and is locked; a caption confirms "Cuts a standard internal
-(tapped) thread."*
-
-**Depth means depth**: the full stated Depth is what actually gets removed
-from the material — a "Depth: 10mm" hole removes 10mm, not 5mm (this was a
-real bug caught and fixed during this review; see §11).
-
-![Threaded hole applied](manual-assets/11-hole-threaded-applied.png)
-
-*Result: a visible internal thread spiraling down the bore, cut by
-subtracting the exact same helical geometry a real tap would leave behind.*
+*Left: a hole applied. Right: immediately after `Ctrl+Z` — back to the
+unmodified cube. Redo (button or `Ctrl+Y`) reapplies it.*
 
 ---
 
-## 6. Primitive Add/Subtract
+## 5. Transform tool
 
-Tab: **Primitive**. Places a block, cylinder, or washer and unions
-(adds) or subtracts it from the model at a clicked point.
+Tab: **Transform**. Affects the whole selected part.
 
-![Primitive panel](manual-assets/12-primitive-panel.png)
+![Transform panel](manual-assets/06-transform-panel.png)
+
+- **Scale** — X/Y/Z fields show the current size in mm; typing a new value
+  rescales to that exact size. **Uniform** (on by default) keeps all three
+  axes proportional when editing one field.
+- **Rotate** — ±90° snap buttons per axis, plus a **free-angle** row:
+  pick an axis, type any number of degrees, click **Rotate**. Both use the
+  same underlying rotation — the snap buttons are just a fast path for the
+  most common angle.
+- **Center to Origin** — recenters the bounding box at world (0,0,0) on
+  all three axes.
+- **Drop to Build Plate** — Z-only: shifts so the lowest point sits at
+  Z=0. Runs automatically once on import too.
+- **Mirror** — flips the part across X, Y, or Z through its own center.
+  Unlike a naive negative-scale mirror (which leaves every face pointing
+  the wrong way), StitchMesh bakes the mirror into the geometry with
+  corrected winding, so raycasting and further edits keep working
+  correctly afterward.
+
+---
+
+## 6. Hole Modifier
+
+Tab: **Hole**. Cuts a cylindrical (or threaded) hole at a point you click.
+
+**Workflow**: click **Hole** → click a point on any part's surface → the
+sidebar shows Diameter, Depth, Thread, and **Apply Boolean Subtract** /
+**Cancel**. The part you clicked becomes the target automatically — no
+extra selection step, even with multiple objects in the scene.
+
+- **Diameter** / **Depth** (mm) — free-typed when Thread is "Smooth (no
+  thread)". **Depth means depth**: the full stated value is removed from
+  the material, drilling *into* the surface from the clicked point (not
+  split half in/half out).
+- **Thread** — a dropdown of standard hardware sizes (§13). Picking one
+  locks Diameter to that thread's exact major diameter and cuts a real
+  helical thread instead of a smooth cylinder.
+
+![Threaded hole applied](manual-assets/07-hole-threaded.png)
+
+*3/8-16 UNC hole applied: a visible internal thread spiraling down the
+bore, generated from the same geometry a real tap would cut.*
+
+---
+
+## 7. Primitive Add/Subtract
+
+Tab: **Primitive**. Places a block, cylinder, or washer and unions (adds)
+or subtracts it from a part at a clicked point — same click-to-place,
+auto-targeting flow as Hole.
+
+![Primitive panel](manual-assets/08a-primitive-panel.png)
 
 - **Shape**: Block / Cylinder / Washer.
-- **Operation**: **Add (Union)** fuses the primitive onto the model as a
-  new protrusion; **Cut (Subtract)** carves it out as a cavity.
+- **Operation**: **Add (Union)** fuses it onto the model as a new
+  protrusion; **Cut (Subtract)** carves it out as a cavity.
 - **Dimensions**: Block gets Width/Depth/Height; Cylinder gets
-  Diameter/Height; Washer gets Outer Diameter/Inner Diameter/Height.
-- **Thread** (Cylinder shape only): same dropdown as the Hole tool. With
-  **Add (Union)** it becomes an external thread (a printed boss/stud);
-  with **Cut (Subtract)** it becomes an internal thread (a tapped hole) —
-  the panel's caption updates to say which.
+  Diameter/Height; Washer gets Outer/Inner Diameter/Height.
+- **Thread** (Cylinder only): same dropdown as Hole. With **Add** it
+  becomes an external thread (a boss/stud); with **Cut** an internal
+  thread (a tapped hole) — the caption updates to say which.
 
-Click a point on the model to place the primitive (same click-to-place
-flow as the Hole tool), adjust dimensions, then **Apply**.
+![Threaded boss applied](manual-assets/08b-primitive-threaded-boss.png)
 
-![Threaded boss applied](manual-assets/13-primitive-threaded-boss.png)
-
-*M8×1.25, Add (Union), 12mm tall, placed on the top face: a real threaded
-stud protruding from the surface. Bounding-box Z grew from 20.0 to 31.5mm —
-essentially the full 12mm height (minus a deliberate ~0.5mm embed fused
-into the surface for a clean, non-degenerate boolean).*
-
-![Washer placed](manual-assets/14-primitive-washer-placed.png)
-
-*Washer shape selected and placed: outer/inner diameter and height fields,
-with Apply/Cancel once a point is clicked.*
+*M8×1.25, Add (Union), 12mm tall, placed on the top face. Bounding-box Z
+grew from 20.0 to 31.5mm — the full 12mm (minus a deliberate ~0.5mm embed
+fused into the surface for a clean, non-degenerate boolean).*
 
 ---
 
-## 7. Plane Cut
+## 8. Plane Cut
 
-Tab: **Cut**. Splits the whole model into two separate solids along an
-axis-aligned plane.
+Tab: **Cut**. Splits the target part into **two independent, separately
+selectable parts** along an axis-aligned plane.
 
-![Plane cut panel](manual-assets/15-planecut-panel.png)
+![Plane cut panel](manual-assets/09a-planecut-panel.png)
 
-- **Axis** — X / Y / Z, which axis the cutting plane's normal points along.
-- **Height** — the plane's position along that axis. This now
-  auto-defaults to the model's actual center on the selected axis whenever
-  you open the tool or change axis (fixed during this review — the old
-  static default of 0 was a silent no-op for any model sitting on the
-  build plate; see §11).
-- **Apply Cut** — both resulting pieces are kept and exported together.
-
-![Plane cut applied](manual-assets/16-planecut-applied.png)
-
-*After cutting: two separate solids exist, but they sit exactly where the
-original model did with no visual gap between them — see §12, this is a
-known rough edge worth a follow-up ("Move" tool or an auto-separation
-offset) rather than something fixed in this pass.*
+- **Part** selector — only shown once more than one part exists.
+- **Axis** — X / Y / Z, the cutting plane's normal.
+- **Height** — the plane's position on that axis. Auto-defaults to the
+  target's actual center whenever you open the tool or change axis (a
+  model sits on the build plate, so a fixed 0 default would cut at the
+  very bottom edge and remove nothing).
+- **Apply Cut** — both resulting pieces are kept, labeled `(upper)` and
+  `(lower)`, and exported together. They start out sitting exactly where
+  the original was — see the Move tool to actually pull them apart.
 
 ---
 
-## 8. Thread generator & standard sizes
+## 9. Move tool
+
+Tab: **Move**. Selects a part and repositions it — this is what actually
+separates Plane Cut's two halves (or arranges an added part).
+
+![Move panel before separating](manual-assets/09b-move-panel-before-separate.png)
+
+*Right after a Plane Cut: two selectable parts exist (`cube.stl (upper)` /
+`(lower)`), but they still occupy the same space.*
+
+- **Part** dropdown — pick which object to move (hidden with only one part).
+- **Position X / Y / Z** — absolute world position in mm; typing a value
+  moves the part there directly.
+- **Snap to grid** — checkbox; when on, typed positions round to the
+  nearest 1mm.
+- **Nudge buttons** (−/+ per axis) — step by the grid size (1mm, or the
+  snap size if enabled).
+
+![Move panel after separating](manual-assets/09c-move-panel-separated.png)
+
+*The `(upper)` piece moved to Z=35: the two halves are now visibly
+separate, independently selectable, and still export together.*
+
+---
+
+## 10. Measurement tool
+
+Tab: **Measure**. Click a **datum** (reference point), then click a second
+point to read the distance and per-axis offset — useful for checking
+clearances before committing to a hole or thread size.
+
+**Workflow**: click **Measure** → click a point on the model (sets the
+green datum marker) → click another point (orange marker + a white
+connecting line) → the panel shows straight-line **Distance** and
+**ΔX / ΔY / ΔZ**. Click again anywhere to re-measure from the same datum
+without resetting it. **Reset Datum** clears both points.
+
+![Measure tool](manual-assets/10-measure-tool.png)
+
+*Datum (green) and measured point (orange) on the same cube, with the
+distance and per-axis deltas shown in the panel.*
+
+---
+
+## 11. Multiple objects
+
+**Add Part** (toolbar) imports another `.stl` as an independent object,
+auto-positioned beside the existing one (offset along X with a 10mm gap,
+dropped to the build plate) so it doesn't start out overlapping.
+
+![Two independent parts](manual-assets/11-multi-object.png)
+
+*Two cubes in one scene, each drilled independently — clicking a point on
+either cube automatically targets that part; the other is untouched.*
+
+Hole and Primitive always auto-target whichever part you actually click.
+Plane Cut, Move, and Mirror act on an explicitly selected part (the **Part**
+dropdown, shown once more than one part exists). Export always includes
+every part in the scene.
+
+---
+
+## 12. Mesh validation & auto-repair
+
+Every import — the first model or an added part — is checked for two
+kinds of defect and handled differently:
+
+- **Inconsistent or inverted face winding** (a common real-world defect —
+  a few faces flipped, or occasionally an entire mesh reading inside-out)
+  is detected and **automatically repaired**, silently, before you ever
+  see the model. This matters because StitchMesh's click-to-place tools
+  read the *actual* face winding to know which way is "outward" — an
+  unrepaired flipped face would drill in the wrong direction. Repair runs
+  in two passes: a local pass that unifies winding within each connected
+  patch of geometry (by majority vote against its neighbors), then a
+  global pass that flips the whole mesh if it still reads inside-out
+  overall.
+- **Open boundary edges** (holes) or **non-manifold edges** (edges shared
+  by three or more triangles — not a valid solid) are **not** auto-fixed,
+  since closing a hole means guessing a shape. Instead, a dismissible
+  banner appears in the toolbar.
+
+![Mesh issue banner](manual-assets/12-mesh-issue-banner.png)
+
+*A model with one triangle deliberately removed: "cube-with-hole.stl: 4
+open edge(s)" with a dismiss (✕) button. The banner is informational only
+— StitchMesh doesn't attempt to fill the hole automatically.*
+
+---
+
+## 13. Thread generator & standard sizes
 
 Both the Hole and Primitive (cylinder) tools share one **Thread** dropdown
 with three groups:
@@ -230,9 +323,9 @@ with three groups:
 - **Unified Coarse (UNC)**: #4-40, #6-32, #8-32, #10-24, 1/4-20, 5/16-18, 3/8-16, 7/16-14, 1/2-13, 5/8-11, 3/4-10
 - **Unified Fine (UNF)**: #4-48, #6-40, #8-36, #10-32, 1/4-28, 5/16-24, 3/8-24, 7/16-20, 1/2-20, 5/8-18, 3/4-16
 
-Picking a size doesn't just set the diameter — it generates an actual
-helical 60° V-thread mesh, built from the same fundamental-triangle
-geometry both standards share (ISO 68-1 for metric, ASME B1.1 for Unified):
+Picking a size generates an actual helical 60° V-thread mesh, from the
+fundamental-triangle geometry both standards share (ISO 68-1 for metric,
+ASME B1.1 for Unified):
 
 ```
 H (fundamental triangle height) = 0.866025 × pitch
@@ -243,168 +336,155 @@ crest truncated by H/8, root truncated by H/4
 
 These constants were cross-checked against known published table values
 (M6×1.0 → minor diameter 4.917mm; M10×1.5 → pitch diameter 9.026mm) — both
-matched exactly.
-
-An internal (tapped) thread and an external (screw) thread are the *same*
-nominal profile geometrically — the generator is reused as a subtraction
-cutter for one and a union addition for the other, exactly like a real tap
-cuts the mating shape of the bolt it's sized for.
+matched exactly. An internal (tapped) thread and an external (screw)
+thread are the *same* nominal profile — the generator is reused as a
+subtraction cutter for one and a union addition for the other, exactly
+like a real tap cuts the mating shape of the bolt it's sized for. See
+`src/utils/threadGeometry.ts` for the profile math and
+`src/utils/threadStandards.ts` for the size table.
 
 ---
 
-## 9. Printer profiles
+## 14. Printer profiles
 
-The toolbar's **Printer** dropdown (next to the printer icon) holds specs
-for common machines and tunes every threaded feature to match:
+The toolbar's **Printer** dropdown tunes every threaded feature to a
+specific machine:
 
-![Generic printer warning](manual-assets/17-printer-generic-warning.png)
+![Generic printer warning](manual-assets/13a-printer-generic.png)
 
-*Default state: "Generic FDM (0.4mm nozzle)" with a warning triangle —
-shown whenever Generic is active, confirmed or not, since the underlying
-concern (no machine-specific tuning) is still true either way.*
+*Default: "Generic FDM (0.4mm nozzle)" with a warning triangle — shown
+whenever Generic is active, confirmed or not, since the underlying concern
+(no machine-specific tuning) is still true either way.*
 
-![Printer selected](manual-assets/18-printer-selected.png)
+![Printer selected](manual-assets/13b-printer-selected.png)
 
 *After picking "Prusa MK4": the warning icon clears.*
 
-What the profile actually changes:
+What the profile changes:
 
-- **Mesh resolution** — radial facet count and helical height-ring count
-  are computed from the printer's nozzle/spot diameter and typical layer
-  height, so the thread mesh isn't finer than the machine can reproduce
-  (wasted triangles) or coarser than it needs to be (visibly faceted).
-- **Internal-thread clearance** — a small diametral clearance is added to
+- **Mesh resolution** — radial facets and helical height-rings sized to
+  the printer's nozzle/spot diameter and typical layer height.
+- **Internal-thread clearance** — a small diametral clearance added to
   tapped holes (0.25–0.35mm for FDM depending on machine, 0.1mm for resin)
-  so a print actually accepts a real bolt despite typical over-extrusion.
-- **Printability warning** — appears directly under the Thread dropdown in
-  the Hole/Primitive panel when a chosen pitch is finer than the selected
-  nozzle can resolve, or the size is small enough (below roughly M4/#8)
-  that a threaded insert would print more reliably than the thread itself.
+  so a print accepts a real bolt despite typical over-extrusion.
+- **Printability warning** — in the Thread panel, when a pitch is finer
+  than the nozzle can resolve, or the size is small enough (below roughly
+  M4/#8) that a threaded insert would print more reliably.
 
-Included profiles: Generic FDM, Bambu Lab X1 Carbon, Bambu Lab P1S, Prusa
-MK4, Creality Ender 3 V2, Creality K1C, Voron 2.4 (350mm), Ultimaker S5,
-Elegoo Saturn 3 (resin), Formlabs Form 4 (resin).
+Included: Generic FDM, Bambu Lab X1 Carbon, Bambu Lab P1S, Prusa MK4,
+Creality Ender 3 V2, Creality K1C, Voron 2.4 (350mm), Ultimaker S5, Elegoo
+Saturn 3 (resin), Formlabs Form 4 (resin).
 
 ---
 
-## 10. Every control, at a glance
+## 15. Every control, at a glance
 
 | Location | Control | Does |
 |---|---|---|
-| Toolbar | Open STL | Import an `.stl` (drag-and-drop also works anywhere on the viewport) |
-| Toolbar | Export STL | Save the current model as a new `.stl` |
-| Toolbar | Top / Front / Side / Iso | Jump to a preset camera framing |
+| Toolbar | Open STL | Import an `.stl`, replacing the scene (drag-and-drop works too) |
+| Toolbar | Add Part | Import an `.stl` as a new independent object |
+| Toolbar | Export STL | Save the current scene as a new `.stl` |
+| Toolbar | New | Clear the model (confirms first) |
+| Toolbar | Undo / Redo | Step back/forward through edit history (`Ctrl+Z` / `Ctrl+Y`) |
+| Toolbar | Top / Front / Side / Iso | Jump to a preset camera framing (`1`–`4`) |
 | Toolbar | Printer dropdown | Select target printer; tunes thread resolution/clearance |
-| Toolbar | Wireframe / Flat shading / Bounding box | Display toggles |
+| Toolbar | Wireframe / Flat shading / Bounding box | Display toggles (`W` / — / `B`) |
 | Sidebar → Info | (read-only) | File name, bounding box |
-| Sidebar → Transform | Scale X/Y/Z, Uniform | Resize the model |
-| Sidebar → Transform | Rotate ±90° (×3 axes) | Snap-rotate the model |
-| Sidebar → Transform | Center to Origin | Center bounding box at (0,0,0) |
-| Sidebar → Transform | Drop to Build Plate | Z-align lowest point to 0 |
+| Sidebar → Transform | Scale X/Y/Z, Uniform | Resize the part |
+| Sidebar → Transform | Rotate ±90° (×3 axes), Free angle | Rotate the part |
+| Sidebar → Transform | Center to Origin, Drop to Build Plate | Reposition the part |
+| Sidebar → Transform | Mirror X/Y/Z | Flip the part |
 | Sidebar → Hole | Diameter, Depth, Thread | Configure a hole cutter after clicking a point |
-| Sidebar → Hole | Apply Boolean Subtract / Cancel | Commit or discard the hole |
+| Sidebar → Hole | Apply Boolean Subtract / Cancel | Commit or discard |
 | Sidebar → Primitive | Shape, Operation, dimensions, Thread | Configure a primitive after clicking a point |
-| Sidebar → Primitive | Apply / Cancel | Commit or discard the primitive |
-| Sidebar → Cut | Axis, Height, Apply Cut | Split the model in two |
+| Sidebar → Primitive | Apply / Cancel | Commit or discard |
+| Sidebar → Cut | Part, Axis, Height, Apply Cut | Split the target part in two |
+| Sidebar → Move | Part, Position X/Y/Z, Snap, nudge | Reposition a part |
+| Sidebar → Measure | (click viewport) | Set datum, measure distance/deltas |
 | Viewport | Left/middle-drag, right-drag, scroll | Orbit, pan, zoom |
 
 ---
 
-## 11. Accuracy & validity review
+## 16. Accuracy & validity review
 
-A full-codebase review (an automated correctness pass plus manual
-re-derivation of the placement math) was run against everything built in
-this project. Two real, user-facing bugs were found and are **already
-fixed** as of this manual:
+A full-codebase review (an automated correctness pass, plus manual
+re-derivation of the placement math for every new tool) was run twice this
+project — once after the initial CSG/thread work, and again after this
+round's ten new features. All findings below are **already fixed**.
 
-1. **Hole/Primitive depth was silently halved.** The cutter mesh is built
-   centered on its own axis; positioning its center exactly on the clicked
-   surface point meant only half of any stated Depth/Height actually did
-   anything — the other half was wasted straddling the surface in open
-   air. Fixed by shifting the cutter along the surface normal so the full
-   stated length lands on the correct side (into the material for a cut,
-   outward for an addition), confirmed by drilling a 25mm-deep hole
-   through a 20mm-thick test block and verifying it broke through the far
-   face.
-2. **Plane Cut's default height (0) was a silent no-op.** Models load
-   sitting on the build plate (Z starts at 0, not centered), so cutting Z
-   at height 0 sliced exactly at the bottom face and removed nothing on
-   first try. Fixed to auto-default to the model's actual center on
-   whichever axis is selected.
+**From the first pass:**
+1. **Hole/Primitive depth was silently halved** — the cutter was centered
+   on the clicked point instead of driven into the surface. Fixed
+   (`positionCutterAtSurface`); confirmed by drilling a hole deeper than
+   the material and verifying it broke through the far face.
+2. **Plane Cut's default height (0) was a silent no-op** on any
+   build-plate-dropped model. Fixed to auto-default to the target's
+   actual center.
+3. A coordinate-space bug (using each mesh's local transform instead of
+   its world transform in the CSG boolean) that could silently miss
+   entirely after a prior scale/rotate. Fixed; still holds under this
+   round's testing.
 
-Two smaller code-quality findings (a duplicated "generic printer" id
-string across three files, and a stale README line contradicting the
-Generic-warning-icon's actual intended behavior) were also fixed.
+**From this pass (the ten new features):**
+- Mesh repair was verified against three synthetic defects: a mesh with
+  two faces deliberately flipped, a fully inside-out mesh, and a mesh with
+  a real open hole. The first two are silently and correctly repaired
+  (confirmed via a through-hole test producing byte-identical triangle
+  counts to a known-good baseline); the third is correctly left alone and
+  reported.
+- Mirror was verified to preserve correct winding by drilling a hole
+  immediately afterward and confirming the raycast/CSG pipeline still
+  works — a naive negative-scale mirror would have broken this silently.
+- Multi-object targeting was verified by drilling two independent cubes
+  separately and confirming via exported triangle counts that only the
+  clicked part changed each time.
+- Undo/redo was verified via both the keyboard shortcut and toolbar
+  buttons, confirming an exact round-trip (12 → 348 → 12 → 348 triangles
+  across apply → undo → redo).
+- Snap-to-grid was verified by typing a fractional position (12.6) and
+  confirming it rounded to the nearest 1mm grid line (13).
+- Free-angle rotation was verified with a 45° rotation, confirming the
+  resulting bounding box grew to the expected 28.3mm diagonal
+  (20 × √2 ≈ 28.28).
 
-**Everything below was re-verified after both fixes**, in a real (non-
-Electron) browser, offline, with zero console errors in every case:
-
-- STL import via drag-and-drop
-- Smooth and threaded Hole Modifier, including a through-hole test
-- Primitive Add (union boss) and Subtract (washer), smooth and threaded
-- Plane Cut (now producing a real, non-degenerate split)
-- Scale/rotate/center/drop transforms, including CSG ops performed *after*
-  a scale or rotation (the coordinate-space bug this exposed — using local
-  instead of world transforms — was caught and fixed earlier in this
-  project; still holds)
-- Printer profile selection, the Generic warning icon, and the
-  export-time confirmation gate
-- Middle-click-drag re-targeted orbit
-- STL export as a valid, correctly-sized binary file
+**Everything was re-verified end-to-end** in a real (non-Electron)
+browser, offline, with **zero console errors** across every test. The
+Electron desktop build was also rebuilt and smoke-tested clean.
 
 **Known limitations** (not bugs, but worth knowing):
 
+- **No hole-filling.** Mesh repair fixes winding but doesn't attempt to
+  triangulate and close actual holes/non-manifold topology — those are
+  reported, not fixed.
 - **Thread mesh triangle counts scale up fast.** A fine-pitch thread over
-  a long depth can generate 10,000+ triangles (e.g. M8×1.25 through a
-  20mm-deep hole was ~13,000). Not incorrect, just heavier than a
-  hobbyist might expect from "add a thread."
-- **Raycast normals are winding-derived, not repaired.** If an imported
-  STL has inverted/inconsistent face winding (a real, if uncommon, defect
-  some STL files have), the Hole/Primitive click-to-place direction logic
-  would be wrong for that face specifically. StitchMesh doesn't currently
-  detect or repair this — see the suggested "mesh validation" feature
-  below.
-- **Plane Cut pieces aren't visually separated.** Both halves stay
-  exactly where the original model was; there's no way to drag them apart
-  within the app, so a cut can look like nothing happened until you
-  inspect dimensions or export.
-- **No free-angle rotation.** Only ±90° snaps exist; there's no numeric
-  degree input for an arbitrary rotation.
-- **Single object only.** StitchMesh holds one model at a time — no
-  importing a second part into the same scene, no assembling multiple
-  pieces before export.
+  a long depth can generate 10,000+ triangles.
+- **Move and Transform are independent.** Transform (scale/rotate/
+  center/drop) acts on the whole target part as a group operation; Move
+  repositions one part relative to others. They don't currently share a
+  combined "part-local transform" model — moving a part and then scaling
+  the *whole scene* via Transform will scale every part together, not just
+  the moved one.
+- **Snap-to-grid applies to the Move tool only**, not to Hole/Primitive
+  click placement (snapping a raycast hit point to a grid could shift it
+  off the actual surface).
+- **Single-level undo/redo stack**, capped at 25 steps.
 
 ---
 
-## 12. Suggested additional features (not yet built — for your review)
+## 17. Possible future features
 
-Researched against what beginner-friendly tools in this space (Tinkercad,
-3D Builder, and general-purpose STL repair tools) treat as baseline, cross-
-referenced against the limitations found above. None of these are built —
-this is a menu, not a plan, pending your go-ahead:
+Most of what was on this list in the previous revision of this manual is
+now built. What's still genuinely missing, for a future pass:
 
-1. **Undo/redo (Ctrl+Z / Ctrl+Y).** Probably the single highest-value gap:
-   every other tool in this class has it, and StitchMesh currently has no
-   way to walk back a bad cut short of reloading the original file.
-2. **Mesh validation / auto-repair on import.** Detect non-manifold edges,
-   holes, or inverted normals in an imported STL and offer a one-click
-   fix — directly closes the "winding-derived normals" limitation above,
-   and is one of the most commonly requested features in this space.
-3. **Free-angle rotation input** alongside the existing ±90° snaps.
-4. **A "Move" tool** to reposition pieces after a Plane Cut (or a
-   primitive placed slightly off) — would also resolve the "cut pieces
-   overlap invisibly" limitation.
-5. **Snap-to-grid** for placement/transforms, off by default.
-6. **A measurement tool** — click two points, read the distance — useful
-   in a hardware-fitting-focused tool like this one for checking clearances
-   before committing to a hole/thread size.
-7. **Keyboard shortcuts** for the view presets and common actions (Tinkercad-style: number keys for views, Delete to reset, etc.).
-8. **A "New/Reset" toolbar action** to clear the current model without a
-   full page reload.
-9. **Mirror tool** — flip the model across an axis.
-10. **Multiple objects in one scene** — import a second part, position it
-    relative to the first, export together (useful for test-fitting a
-    printed part against, say, a washer or bracket modeled separately).
+1. **Hole-filling / non-manifold repair** — closing actual holes, not just
+   fixing winding.
+2. **A true 3D transform gizmo** (drag arrows/rings in the viewport)
+   instead of numeric fields for Move and free rotation.
+3. **Text/label embossing** onto a surface.
+4. **Per-vertex or sculpting-level editing** — StitchMesh is deliberately
+   scoped to primitive-based modification, not freeform mesh editing.
+5. **Saved/named printer profiles** beyond the built-in list (custom
+   nozzle diameter, layer height).
 
 ---
 

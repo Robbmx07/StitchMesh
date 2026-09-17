@@ -214,15 +214,15 @@ function TransformPanel() {
 
       <div className="panel-section">
         <div className="panel-label">Rotate</div>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="space-y-1.5">
           {(['x', 'y', 'z'] as const).map((axis) => (
-            <div key={axis} className="flex flex-col items-center gap-1">
-              <span className="text-xs uppercase text-slate-500">{axis}</span>
-              <div className="flex gap-1">
-                <button className="btn" disabled={!hasModel} onClick={() => viewportActions?.rotateBy(axis, -90)}>
-                  -90°
+            <div key={axis} className="field-row">
+              <span className="text-sm uppercase text-slate-300">{axis}</span>
+              <div className="flex gap-1.5">
+                <button className="btn w-20" disabled={!hasModel} onClick={() => viewportActions?.rotateBy(axis, -90)}>
+                  −90°
                 </button>
-                <button className="btn" disabled={!hasModel} onClick={() => viewportActions?.rotateBy(axis, 90)}>
+                <button className="btn w-20" disabled={!hasModel} onClick={() => viewportActions?.rotateBy(axis, 90)}>
                   +90°
                 </button>
               </div>

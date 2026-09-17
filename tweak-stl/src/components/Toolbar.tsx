@@ -104,7 +104,7 @@ export default function Toolbar() {
   };
 
   return (
-    <div className="flex h-14 shrink-0 items-center gap-3 overflow-x-auto border-b border-base-700 bg-base-900 px-4">
+    <div className="flex min-h-14 shrink-0 flex-wrap items-center gap-3 border-b border-base-700 bg-base-900 px-4 py-2">
       <div className="flex items-center gap-2 pr-3">
         <SquareStack className="h-5 w-5 text-accent-500" />
         <span className="text-sm font-semibold tracking-wide text-slate-100">StitchMesh</span>
