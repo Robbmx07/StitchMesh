@@ -6,6 +6,10 @@ two — without opening a full CAD package.
 
 **Modify, don't model.**
 
+See [`docs/MANUAL.md`](docs/MANUAL.md) for a full walkthrough of every
+feature with screenshots, plus a validation review and a list of
+candidate features not yet built.
+
 ## Stack
 
 - Electron + Vite + TypeScript
