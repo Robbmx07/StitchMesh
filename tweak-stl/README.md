@@ -6,11 +6,19 @@ two — without opening a full CAD package.
 
 **Modify, don't model.**
 
-See [`docs/MANUAL.md`](docs/MANUAL.md) for a full walkthrough of every
-feature with screenshots, plus a validation review and a list of
-candidate features not yet built. See
+See [`docs/MANUAL.md`](docs/MANUAL.md) (or the PDF edition,
+[`docs/StitchMesh-User-Manual.pdf`](docs/StitchMesh-User-Manual.pdf)) for a
+full walkthrough of every feature with screenshots, plus a validation
+review and a list of candidate features not yet built. See
 [`docs/VIDEO_SCRIPT.md`](docs/VIDEO_SCRIPT.md) for a scene-by-scene
 tutorial video script built from that manual.
+
+Regenerate the PDF after editing the manual or its screenshots with:
+
+```bash
+pip install markdown reportlab pillow
+python3 scripts/build-manual-pdf.py
+```
 
 ## Stack
 
