@@ -1,4 +1,4 @@
-import { ChangeEvent } from 'react';
+import { ChangeEvent, useEffect } from 'react';
 import { Circle, Info, Scissors, Scale, SquarePlus } from 'lucide-react';
 import {
   useAppStore,
@@ -377,6 +377,15 @@ const PLANE_AXES: { id: PlaneAxis; label: string }[] = [
 
 function PlaneCutPanel() {
   const { planeCut, hasModel, setPlaneCut, viewportActions } = useAppStore();
+
+  // A cut height of 0 is only meaningful for a model centered on that axis.
+  // Models sit on the build plate at Z=0 (not centered), so re-center the
+  // default height to the model's actual midpoint whenever the tool opens
+  // or the axis changes — otherwise the default Z cut is a silent no-op.
+  useEffect(() => {
+    if (hasModel) viewportActions?.centerPlaneCutHeight(planeCut.axis);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planeCut.axis, hasModel]);
 
   return (
     <div className="panel-section space-y-3">

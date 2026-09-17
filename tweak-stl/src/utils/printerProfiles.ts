@@ -20,9 +20,12 @@ export interface PrinterProfile {
  * approximate the helical profile vertically). Figures are each machine's
  * published/typical stock configuration, not every optional nozzle size.
  */
+/** Default/fallback profile id — used whenever nothing more specific has been picked. */
+export const GENERIC_PRINTER_ID = 'generic-fdm-0.4';
+
 export const PRINTER_PROFILES: PrinterProfile[] = [
   {
-    id: 'generic-fdm-0.4',
+    id: GENERIC_PRINTER_ID,
     name: 'Generic FDM (0.4mm nozzle)',
     manufacturer: 'Generic',
     class: 'fdm',

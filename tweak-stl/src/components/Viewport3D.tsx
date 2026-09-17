@@ -8,9 +8,9 @@ import {
   SUBTRACTION,
   createHoleCutterMesh,
   createPrimitiveMesh,
-  orientToSurface,
   performCSG,
   planeCutMesh,
+  positionCutterAtSurface,
   type ThreadRenderOptions,
 } from '@/utils/csgOperations';
 import { findThreadStandard } from '@/utils/threadStandards';
@@ -231,7 +231,7 @@ export default function Viewport3D() {
           previewMeshRef.current = createHoleCutterMesh(diameter, depth, getThreadRenderOptions(threadId, true));
           scene.add(previewMeshRef.current);
         }
-        orientToSurface(previewMeshRef.current, point, normal);
+        positionCutterAtSurface(previewMeshRef.current, point, normal, depth, 'subtract');
       } else if (tool === 'primitive') {
         const p = useAppStore.getState().primitive;
         if (!previewMeshRef.current || previewMeshRef.current.name !== 'PrimitivePreview') {
@@ -239,7 +239,7 @@ export default function Viewport3D() {
           previewMeshRef.current = createPrimitiveMesh(p.shape, p, getThreadRenderOptions(p.threadId, p.operation === 'subtract'));
           scene.add(previewMeshRef.current);
         }
-        orientToSurface(previewMeshRef.current, point, normal);
+        positionCutterAtSurface(previewMeshRef.current, point, normal, p.height, p.operation === 'subtract' ? 'subtract' : 'union');
       }
     };
 
@@ -407,7 +407,7 @@ export default function Viewport3D() {
         if (!target || !point || !normal) return;
 
         const cutter = createHoleCutterMesh(diameter, depth, getThreadRenderOptions(threadId, true));
-        orientToSurface(cutter, new THREE.Vector3(...point), new THREE.Vector3(...normal));
+        positionCutterAtSurface(cutter, new THREE.Vector3(...point), new THREE.Vector3(...normal), depth, 'subtract');
         cutter.updateMatrix();
 
         const result = performCSG(target, cutter, SUBTRACTION, materialRef.current);
@@ -430,7 +430,13 @@ export default function Viewport3D() {
         if (!target || !p.point || !p.normal) return;
 
         const primitiveMesh = createPrimitiveMesh(p.shape, p, getThreadRenderOptions(p.threadId, p.operation === 'subtract'));
-        orientToSurface(primitiveMesh, new THREE.Vector3(...p.point), new THREE.Vector3(...p.normal));
+        positionCutterAtSurface(
+          primitiveMesh,
+          new THREE.Vector3(...p.point),
+          new THREE.Vector3(...p.normal),
+          p.height,
+          p.operation === 'subtract' ? 'subtract' : 'union',
+        );
         primitiveMesh.updateMatrix();
 
         const op = p.operation === 'union' ? ADDITION : SUBTRACTION;
@@ -457,6 +463,14 @@ export default function Viewport3D() {
         replaceModelMeshes([upper, lower]);
         bakeGroupTransformToIdentity();
         useAppStore.getState().setActiveTool('select');
+      },
+
+      centerPlaneCutHeight: (axis) => {
+        if (modelGroupRef.current.children.length === 0) return;
+        const box = new THREE.Box3().setFromObject(modelGroupRef.current);
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+        useAppStore.getState().setPlaneCut({ height: center[axis] });
       },
     });
 
@@ -497,7 +511,7 @@ export default function Viewport3D() {
         scene.remove(preview);
         preview.geometry.dispose();
         const fresh = createHoleCutterMesh(state.hole.diameter, state.hole.depth, getThreadRenderOptions(state.hole.threadId, true));
-        orientToSurface(fresh, point, normal);
+        positionCutterAtSurface(fresh, point, normal, state.hole.depth, 'subtract');
         scene.add(fresh);
         previewMeshRef.current = fresh;
       } else if (state.activeTool === 'primitive' && state.primitive.placed && preview.name === 'PrimitivePreview') {
@@ -512,7 +526,7 @@ export default function Viewport3D() {
           state.primitive,
           getThreadRenderOptions(state.primitive.threadId, state.primitive.operation === 'subtract'),
         );
-        orientToSurface(fresh, point, normal);
+        positionCutterAtSurface(fresh, point, normal, state.primitive.height, state.primitive.operation === 'subtract' ? 'subtract' : 'union');
         scene.add(fresh);
         previewMeshRef.current = fresh;
       }

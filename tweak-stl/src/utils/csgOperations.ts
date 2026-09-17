@@ -165,6 +165,32 @@ export function orientToSurface(mesh: THREE.Object3D, point: THREE.Vector3, norm
   mesh.quaternion.copy(quaternion);
 }
 
+/**
+ * Orients a cutter/boss mesh (built centered on its own axis, spanning
+ * length/2 either side) to a surface point/normal, then shifts it along
+ * that normal so the FULL stated length does its job instead of half of
+ * it being wasted straddling the surface: mostly *into* the material for
+ * a subtractive cutter (a hole/tapped-hole "Depth" of 10mm removes 10mm of
+ * material, not 5mm), or mostly *outward* for an additive boss (a "Height"
+ * of 10mm protrudes 10mm, not 5mm). A small embed is kept on the buried
+ * side so the two solids overlap enough for a clean, non-degenerate CSG
+ * result rather than sitting exactly tangent to the surface.
+ */
+export function positionCutterAtSurface(
+  mesh: THREE.Object3D,
+  point: THREE.Vector3,
+  normal: THREE.Vector3,
+  length: number,
+  mode: 'subtract' | 'union',
+  embedMM = 0.5,
+): void {
+  orientToSurface(mesh, point, normal);
+  const embed = Math.min(embedMM, length / 2);
+  const outwardShift = length / 2 - embed;
+  const signedShift = mode === 'subtract' ? -outwardShift : outwardShift;
+  mesh.position.addScaledVector(normal.clone().normalize(), signedShift);
+}
+
 /** Splits a mesh into two halves along an axis-aligned plane using CSG. */
 export function planeCutMesh(
   target: THREE.Mesh,

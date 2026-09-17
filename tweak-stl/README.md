@@ -112,6 +112,8 @@ to that machine:
   threaded insert would be more reliable than printing the thread directly.
 
 The toolbar defaults to "Generic FDM (0.4mm nozzle)" and flags it with a
-warning icon until you actively pick a profile (Generic included) from the
-dropdown. Exporting before you've picked one prompts you to either choose a
-printer first or continue anyway with the generic defaults.
+warning icon whenever Generic is the active profile — including if you
+deliberately pick it, since the underlying concern (no machine-specific
+tuning) is still true. Exporting before you've made *any* active choice
+(Generic or otherwise) prompts you to either pick a printer first or
+continue anyway; once you've picked something once, it won't ask again.

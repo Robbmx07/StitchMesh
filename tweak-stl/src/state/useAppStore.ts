@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { GENERIC_PRINTER_ID } from '@/utils/printerProfiles';
 
 export type ToolId = 'select' | 'transform' | 'hole' | 'primitive' | 'planeCut';
 export type PrimitiveShape = 'box' | 'cylinder' | 'washer';
@@ -71,6 +72,8 @@ export interface ViewportActions {
   applyPrimitive: () => void;
   cancelPrimitivePlacement: () => void;
   applyPlaneCut: () => void;
+  /** Defaults planeCut.height to the model's current bounding-box center on the given axis, so the default cut isn't a no-op on a build-plate-dropped model. */
+  centerPlaneCutHeight: (axis: PlaneAxis) => void;
 }
 
 interface AppState {
@@ -165,7 +168,7 @@ export const useAppStore = create<AppState>((set) => ({
   wireframe: false,
   flatShading: false,
   showBoundingBox: true,
-  printerProfileId: 'generic-fdm-0.4',
+  printerProfileId: GENERIC_PRINTER_ID,
   printerProfileConfirmed: false,
 
   activeTool: 'select',

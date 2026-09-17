@@ -11,9 +11,7 @@ import {
   SquareStack,
 } from 'lucide-react';
 import { useAppStore, type OrthoView } from '@/state/useAppStore';
-import { PRINTER_PROFILES } from '@/utils/printerProfiles';
-
-const GENERIC_PRINTER_ID = 'generic-fdm-0.4';
+import { PRINTER_PROFILES, GENERIC_PRINTER_ID } from '@/utils/printerProfiles';
 
 const ORTHO_VIEWS: { id: OrthoView; label: string }[] = [
   { id: 'top', label: 'Top' },
