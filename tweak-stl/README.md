@@ -8,7 +8,9 @@ two — without opening a full CAD package.
 
 See [`docs/MANUAL.md`](docs/MANUAL.md) for a full walkthrough of every
 feature with screenshots, plus a validation review and a list of
-candidate features not yet built.
+candidate features not yet built. See
+[`docs/VIDEO_SCRIPT.md`](docs/VIDEO_SCRIPT.md) for a scene-by-scene
+tutorial video script built from that manual.
 
 ## Stack
 
