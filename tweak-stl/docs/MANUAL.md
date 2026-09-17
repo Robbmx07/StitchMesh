@@ -5,11 +5,8 @@ edits to an existing `.stl` file — resize a hole, add a threaded boss, cut
 a model in two and move the pieces apart, measure a clearance — without
 learning a full CAD package.
 
-**This document is written for another AI to read alongside a copy of the
-built app (`dist-standalone/index.html`) and produce a tutorial video.**
-Every section names the exact UI element, what it does, what input it
-expects, and shows a real screenshot of the result. Screenshots live in
-`docs/manual-assets/` next to this file.
+This manual walks through every feature with screenshots so you can find
+what you need quickly.
 
 ---
 
@@ -28,34 +25,27 @@ Undo/Redo, view presets, printer picker, display toggles). Empty dark
 viewport with a grid and axes gizmo. Sidebar defaulted to Info, reporting
 "No model loaded."*
 
-It ships in three forms, all built from the same source:
-
-| Build | Command | What you get |
-|---|---|---|
-| Desktop app | `npm run dev` (dev) / `npm run build` (packaged) | Electron app with native Open/Save file dialogs |
-| Web bundle | `npm run build:web` | Multi-file `dist/` folder; needs a static server |
-| **Standalone** | `npm run build:standalone` | **One `dist-standalone/index.html` file** — double-click it, works fully offline, no install, no server. Import/export fall back to drag-and-drop and browser downloads. |
-
-All screenshots here were captured from the standalone build running in a
-real (non-Electron) browser, fully offline.
+StitchMesh is a single self-contained HTML file. Double-click it to open it
+in your browser and it works fully offline — no install, no server, and
+nothing is ever sent over the internet. Importing reads your `.stl` file
+straight into memory, and exporting saves a new file through your
+browser's normal download flow, so your source file is never modified.
 
 ---
 
 ## 2. Loading, adding, exporting, and resetting a model
 
-- **Import**: drag an `.stl` onto the viewport, or click **Open STL**
-  (native file picker on desktop, browser picker in standalone). This
-  *replaces* everything currently in the scene. Reading a file never
-  modifies it on disk.
+- **Import**: drag an `.stl` onto the viewport, or click **Open STL** to
+  pick a file. This *replaces* everything currently in the scene. Reading
+  a file never modifies it on disk.
 - **Add Part**: imports another `.stl` as a second, independent object
   next to the first, rather than replacing it — see §11 (Multiple Objects).
   If nothing is loaded yet, Add Part behaves exactly like Open STL.
 - **New**: clears the current model (and its undo history). Asks for
   confirmation first if a model is loaded.
 - **Export STL**: saves the current scene — every part in it — as a new
-  file. Desktop: native Save As dialog. Standalone: a browser download
-  named `<original-name>-modified.stl`. Your source file is never
-  overwritten.
+  file, downloaded as `<original-name>-modified.stl`. Your source file is
+  never overwritten.
 
 **Printer-not-selected export gate**: the first time you click Export STL
 without having picked a printer profile (§14), a dialog interrupts:
@@ -447,9 +437,8 @@ round's ten new features. All findings below are **already fixed**.
   resulting bounding box grew to the expected 28.3mm diagonal
   (20 × √2 ≈ 28.28).
 
-**Everything was re-verified end-to-end** in a real (non-Electron)
-browser, offline, with **zero console errors** across every test. The
-Electron desktop build was also rebuilt and smoke-tested clean.
+**Everything was re-verified end-to-end** in a real browser, offline, with
+**zero console errors** across every test.
 
 **Known limitations** (not bugs, but worth knowing):
 
@@ -488,6 +477,4 @@ now built. What's still genuinely missing, for a future pass:
 
 ---
 
-*Screenshots in this manual live in `docs/manual-assets/` alongside this
-file, captured from the standalone build (`dist-standalone/index.html`) at
-1440×900 in a real headless Chromium instance, offline.*
+Thanks for using StitchMesh. *Modify, don't model.*
