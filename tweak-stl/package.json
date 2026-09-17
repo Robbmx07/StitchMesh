@@ -9,6 +9,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build && electron-builder",
     "build:web": "tsc -b && vite build",
+    "build:standalone": "tsc -b && vite build --config vite.standalone.config.ts",
     "preview": "vite preview",
     "electron:build": "electron-builder",
     "lint": "tsc --noEmit"
@@ -34,7 +35,8 @@
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
     "vite-plugin-electron": "^0.29.0",
-    "vite-plugin-electron-renderer": "^0.14.6"
+    "vite-plugin-electron-renderer": "^0.14.6",
+    "vite-plugin-singlefile": "^2.3.3"
   },
   "build": {
     "appId": "com.tweakstl.app",

@@ -45,16 +45,23 @@ export function performCSG(
   operation: typeof SUBTRACTION | typeof ADDITION,
   resultMaterial: THREE.Material | THREE.Material[],
 ): THREE.Mesh {
-  target.updateMatrix();
-  tool.updateMatrix();
+  // Use world matrices, not local ones: `target` is typically parented
+  // under a group that carries the model's own position/rotation/scale
+  // (e.g. the "drop to build plate" offset applied on load), while `tool`
+  // (a raycast-placed cutter) is positioned directly in world space. Using
+  // local matrices silently drops that parent offset and evaluates the two
+  // operands in mismatched coordinate spaces — the boolean can silently
+  // miss entirely if the offset pushes the target outside the cutter.
+  target.updateMatrixWorld(true);
+  tool.updateMatrixWorld(true);
 
   const targetBrush = new Brush(normalizeForCSG(target.geometry), resultMaterial as THREE.Material);
-  targetBrush.matrix.copy(target.matrix);
+  targetBrush.matrix.copy(target.matrixWorld);
   targetBrush.matrixAutoUpdate = false;
   targetBrush.updateMatrixWorld(true);
 
   const toolBrush = new Brush(normalizeForCSG(tool.geometry), resultMaterial as THREE.Material);
-  toolBrush.matrix.copy(tool.matrix);
+  toolBrush.matrix.copy(tool.matrixWorld);
   toolBrush.matrixAutoUpdate = false;
   toolBrush.updateMatrixWorld(true);
 

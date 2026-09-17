@@ -93,6 +93,27 @@ export default function Viewport3D() {
     return result;
   };
 
+  // performCSG bakes each operand's full WORLD transform into the result's
+  // vertex positions, so the result must be shown with an identity parent
+  // transform or the group's own position/rotation/scale (e.g. the
+  // "drop to build plate" offset applied on load, or a Transform-panel
+  // scale) would be applied a second time on top of the already-baked
+  // geometry. Call this right after adding a CSG result to the group.
+  const bakeGroupTransformToIdentity = () => {
+    const group = modelGroupRef.current;
+    group.position.set(0, 0, 0);
+    group.rotation.set(0, 0, 0);
+    group.scale.set(1, 1, 1);
+    group.updateMatrixWorld(true);
+    updateDimensions();
+
+    const box = new THREE.Box3().setFromObject(group);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    baseSizeRef.current = size.clone();
+    useAppStore.getState().setTransform({ scaleX: 100, scaleY: 100, scaleZ: 100 });
+  };
+
   // ---- one-time scene setup -----------------------------------------
   useEffect(() => {
     const container = containerRef.current;
@@ -362,6 +383,7 @@ export default function Viewport3D() {
         const result = performCSG(target, cutter, SUBTRACTION, materialRef.current);
         result.name = 'ModelPiece';
         replaceModelMeshes([result]);
+        bakeGroupTransformToIdentity();
         clearPreview();
         useAppStore.getState().resetHole();
         useAppStore.getState().setActiveTool('select');
@@ -385,6 +407,7 @@ export default function Viewport3D() {
         const result = performCSG(target, primitiveMesh, op, materialRef.current);
         result.name = 'ModelPiece';
         replaceModelMeshes([result]);
+        bakeGroupTransformToIdentity();
         clearPreview();
         useAppStore.getState().resetPrimitivePlacement();
         useAppStore.getState().setActiveTool('select');
@@ -402,6 +425,7 @@ export default function Viewport3D() {
 
         const { upper, lower } = planeCutMesh(target, axis, height, materialRef.current);
         replaceModelMeshes([upper, lower]);
+        bakeGroupTransformToIdentity();
         useAppStore.getState().setActiveTool('select');
       },
     });

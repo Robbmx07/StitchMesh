@@ -32,6 +32,28 @@ npm run build
 Produces a packaged desktop app via `electron-builder` in `release/`. Use
 `npm run build:web` to build only the renderer bundle without packaging.
 
+## Standalone offline HTML build
+
+```bash
+npm run build:standalone
+```
+
+Produces a single self-contained file at `dist-standalone/index.html` — all
+JS and CSS inlined, no external requests, nothing to install. Open it
+directly by double-clicking (`file://`) in any modern browser and it works
+fully offline, including STL import (drag-and-drop) and STL export (a
+regular browser download).
+
+This works without a local server because the script is inlined directly
+into the page rather than loaded from a separate file — Chromium only
+blocks ES module *imports* over `file://`, not an inline module with
+nothing left to fetch. The one difference from the desktop app: there's no
+native Save/Open dialog, since the browser sandbox doesn't allow a page to
+write anywhere on disk. Import never touches the original file (it's read
+into memory via the File API), and export always saves a *new* file
+through the browser's normal download flow — your source `.stl` is never
+modified or overwritten.
+
 ## Features (MVP)
 
 - Drag-and-drop or file-picker STL import, binary STL export
