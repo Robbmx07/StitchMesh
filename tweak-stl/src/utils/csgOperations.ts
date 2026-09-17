@@ -83,10 +83,25 @@ export function performCSG(
 
 export { SUBTRACTION, ADDITION };
 
+export interface ThreadRenderOptions {
+  thread?: ThreadStandard | null;
+  /** Mesh resolution tuned to a target printer; see printerProfiles.ts. */
+  resolution?: { radialSegments: number; ringsPerPitch: number };
+  /** Diametral clearance added for a printable internal (tapped) thread. */
+  clearanceMM?: number;
+}
+
 /** Plain smooth cylinder, or a standard 60° V-thread rod when `thread` is given. */
-function cylinderOrThreadGeometry(diameter: number, length: number, thread?: ThreadStandard | null): THREE.BufferGeometry {
+function cylinderOrThreadGeometry(diameter: number, length: number, threadOpts?: ThreadRenderOptions): THREE.BufferGeometry {
+  const thread = threadOpts?.thread;
   if (thread) {
-    return createThreadedRodGeometry({ majorDiameterMM: thread.majorDiameterMM, pitchMM: thread.pitchMM, lengthMM: length });
+    return createThreadedRodGeometry({
+      majorDiameterMM: thread.majorDiameterMM + (threadOpts?.clearanceMM ?? 0),
+      pitchMM: thread.pitchMM,
+      lengthMM: length,
+      radialSegments: threadOpts?.resolution?.radialSegments,
+      ringsPerPitch: threadOpts?.resolution?.ringsPerPitch,
+    });
   }
   const geometry = new THREE.CylinderGeometry(diameter / 2, diameter / 2, length, 48);
   // Cylinder is built along Y by default; orient along local Z so it can be
@@ -101,8 +116,8 @@ function cylinderOrThreadGeometry(diameter: number, length: number, thread?: Thr
  * internal thread — subtracting this rod's exact profile is how a real tap
  * carves a matching female thread into a hole.
  */
-export function createHoleCutterMesh(diameter: number, depth: number, thread?: ThreadStandard | null): THREE.Mesh {
-  const geometry = cylinderOrThreadGeometry(diameter, depth, thread);
+export function createHoleCutterMesh(diameter: number, depth: number, threadOpts?: ThreadRenderOptions): THREE.Mesh {
+  const geometry = cylinderOrThreadGeometry(diameter, depth, threadOpts);
   const mesh = new THREE.Mesh(geometry, previewMaterial.clone());
   mesh.name = 'HoleCutterPreview';
   return mesh;
@@ -111,14 +126,14 @@ export function createHoleCutterMesh(diameter: number, depth: number, thread?: T
 export function createPrimitiveMesh(
   shape: 'box' | 'cylinder' | 'washer',
   params: { width: number; depth: number; height: number; diameter: number; innerDiameter: number },
-  thread?: ThreadStandard | null,
+  threadOpts?: ThreadRenderOptions,
 ): THREE.Mesh {
   let geometry: THREE.BufferGeometry;
 
   if (shape === 'box') {
     geometry = new THREE.BoxGeometry(params.width, params.depth, params.height);
   } else if (shape === 'cylinder') {
-    geometry = cylinderOrThreadGeometry(params.diameter, params.height, thread);
+    geometry = cylinderOrThreadGeometry(params.diameter, params.height, threadOpts);
   } else {
     // Washer: outer cylinder minus inner cylinder, baked into one geometry via CSG.
     const outerGeo = new THREE.CylinderGeometry(params.diameter / 2, params.diameter / 2, params.height, 48);

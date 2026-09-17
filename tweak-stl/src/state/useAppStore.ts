@@ -84,6 +84,11 @@ interface AppState {
   flatShading: boolean;
   showBoundingBox: boolean;
 
+  /** Target printer profile id (printerProfiles.ts) — tunes thread mesh resolution and internal-thread clearance. */
+  printerProfileId: string;
+  /** True once the user has actively picked a profile from the dropdown (Generic included) — false means it's still just the unconfirmed default. */
+  printerProfileConfirmed: boolean;
+
   activeTool: ToolId;
 
   transform: TransformState;
@@ -102,6 +107,7 @@ interface AppState {
   setWireframe: (on: boolean) => void;
   setFlatShading: (on: boolean) => void;
   setShowBoundingBox: (on: boolean) => void;
+  setPrinterProfileId: (id: string) => void;
 
   setActiveTool: (tool: ToolId) => void;
 
@@ -159,6 +165,8 @@ export const useAppStore = create<AppState>((set) => ({
   wireframe: false,
   flatShading: false,
   showBoundingBox: true,
+  printerProfileId: 'generic-fdm-0.4',
+  printerProfileConfirmed: false,
 
   activeTool: 'select',
 
@@ -178,6 +186,7 @@ export const useAppStore = create<AppState>((set) => ({
   setWireframe: (on) => set({ wireframe: on }),
   setFlatShading: (on) => set({ flatShading: on }),
   setShowBoundingBox: (on) => set({ showBoundingBox: on }),
+  setPrinterProfileId: (id) => set({ printerProfileId: id, printerProfileConfirmed: true }),
 
   setActiveTool: (tool) =>
     set((state) => ({

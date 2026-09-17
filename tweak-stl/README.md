@@ -58,7 +58,9 @@ modified or overwritten.
 
 - Drag-and-drop or file-picker STL import, binary STL export
 - Orbit/pan/zoom viewport with Top/Front/Side/Iso presets, wireframe, flat
-  shading, and a live bounding-box (X × Y × Z) readout
+  shading, and a live bounding-box (X × Y × Z) readout — left-drag or
+  middle-drag both orbit, and middle-drag re-centers on whatever's under
+  the cursor at the moment you click, not a fixed pivot
 - Uniform/non-uniform scaling, 90° rotation snaps, center-to-origin, and
   drop-to-build-plate
 - **Hole Modifier**: click a point on the model, size a cutting cylinder,
@@ -87,3 +89,29 @@ thread and an external (screw) thread are the same nominal profile — the
 same generator is used as a union for a boss/stud or a subtraction for a
 tapped hole, exactly like a real tap cuts the mating shape of the bolt
 it's sized for.
+
+## Printer profiles
+
+A **Printer** dropdown in the toolbar (`src/utils/printerProfiles.ts`) holds
+specs for common desktop 3D printers — nozzle/spot diameter, layer-height
+range, and build volume — for Bambu Lab, Prusa, Creality, Voron, Ultimaker
+(FDM) and Elegoo/Formlabs (resin). Picking one tunes every threaded feature
+to that machine:
+
+- **Mesh resolution** — radial facets sized to what the nozzle (or resin
+  pixel/laser spot) can actually resolve, and helical height rings sized
+  to the printer's typical layer height, so the thread mesh isn't finer
+  (wasted triangles) or coarser (visibly faceted) than the printer can
+  reproduce.
+- **Internal-thread clearance** — a small diametral clearance added to
+  tapped holes so a print actually accepts a real bolt despite typical FDM
+  over-extrusion; resin gets a tighter clearance since it's far more
+  dimensionally accurate.
+- **Printability warnings** — a note in the Thread panel when a pitch is
+  finer than the nozzle can resolve, or a size is small enough that a
+  threaded insert would be more reliable than printing the thread directly.
+
+The toolbar defaults to "Generic FDM (0.4mm nozzle)" and flags it with a
+warning icon until you actively pick a profile (Generic included) from the
+dropdown. Exporting before you've picked one prompts you to either choose a
+printer first or continue anyway with the generic defaults.

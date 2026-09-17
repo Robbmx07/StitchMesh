@@ -11,8 +11,10 @@ import {
   orientToSurface,
   performCSG,
   planeCutMesh,
+  type ThreadRenderOptions,
 } from '@/utils/csgOperations';
 import { findThreadStandard } from '@/utils/threadStandards';
+import { findPrinterProfile, recommendedThreadResolution } from '@/utils/printerProfiles';
 import { useAppStore, type OrthoView } from '@/state/useAppStore';
 
 const MODEL_COLOR = 0x9ca3af;
@@ -94,6 +96,18 @@ export default function Viewport3D() {
     return result;
   };
 
+  /** Resolves the current thread selection into render options tuned for the active printer profile. */
+  const getThreadRenderOptions = (threadId: string | null, isInternal: boolean): ThreadRenderOptions => {
+    const thread = findThreadStandard(threadId);
+    if (!thread) return { thread: null };
+    const profile = findPrinterProfile(useAppStore.getState().printerProfileId);
+    return {
+      thread,
+      resolution: recommendedThreadResolution(profile, thread.majorDiameterMM, thread.pitchMM),
+      clearanceMM: isInternal ? profile.internalThreadClearanceMM : 0,
+    };
+  };
+
   // performCSG bakes each operand's full WORLD transform into the result's
   // vertex positions, so the result must be shown with an identity parent
   // transform or the group's own position/rotation/scale (e.g. the
@@ -137,6 +151,9 @@ export default function Viewport3D() {
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
+    // Middle-drag orbits (re-targeted to whatever's under the cursor at
+    // mousedown, below); left keeps its default rotate too, right still pans.
+    controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.PAN };
     controlsRef.current = controls;
 
     const hemi = new THREE.HemisphereLight(0xffffff, 0x1a1c22, 1.1);
@@ -190,6 +207,18 @@ export default function Viewport3D() {
       return hits[0] ?? null;
     };
 
+    // Middle-click-drag should orbit around whatever's under the cursor,
+    // not OrbitControls' existing (possibly far-away) target. Re-target on
+    // mousedown, in the capture phase so this runs before OrbitControls'
+    // own pointerdown handler reads controls.target to start its drag.
+    const onMiddleClickRetarget = (event: PointerEvent) => {
+      if (event.button !== 1) return;
+      event.preventDefault(); // stop the browser's middle-click autoscroll cursor
+      const hit = getIntersection(event);
+      if (hit) controls.target.copy(hit.point);
+    };
+    renderer.domElement.addEventListener('pointerdown', onMiddleClickRetarget, { capture: true });
+
     const updateCutterPreview = (point: THREE.Vector3, normal: THREE.Vector3) => {
       const tool = useAppStore.getState().activeTool;
       const scene = sceneRef.current;
@@ -199,7 +228,7 @@ export default function Viewport3D() {
         const { diameter, depth, threadId } = useAppStore.getState().hole;
         if (!previewMeshRef.current || previewMeshRef.current.name !== 'HoleCutterPreview') {
           clearPreview();
-          previewMeshRef.current = createHoleCutterMesh(diameter, depth, findThreadStandard(threadId));
+          previewMeshRef.current = createHoleCutterMesh(diameter, depth, getThreadRenderOptions(threadId, true));
           scene.add(previewMeshRef.current);
         }
         orientToSurface(previewMeshRef.current, point, normal);
@@ -207,7 +236,7 @@ export default function Viewport3D() {
         const p = useAppStore.getState().primitive;
         if (!previewMeshRef.current || previewMeshRef.current.name !== 'PrimitivePreview') {
           clearPreview();
-          previewMeshRef.current = createPrimitiveMesh(p.shape, p, findThreadStandard(p.threadId));
+          previewMeshRef.current = createPrimitiveMesh(p.shape, p, getThreadRenderOptions(p.threadId, p.operation === 'subtract'));
           scene.add(previewMeshRef.current);
         }
         orientToSurface(previewMeshRef.current, point, normal);
@@ -377,7 +406,7 @@ export default function Viewport3D() {
         const target = getMergedTargetMesh();
         if (!target || !point || !normal) return;
 
-        const cutter = createHoleCutterMesh(diameter, depth, findThreadStandard(threadId));
+        const cutter = createHoleCutterMesh(diameter, depth, getThreadRenderOptions(threadId, true));
         orientToSurface(cutter, new THREE.Vector3(...point), new THREE.Vector3(...normal));
         cutter.updateMatrix();
 
@@ -400,7 +429,7 @@ export default function Viewport3D() {
         const target = getMergedTargetMesh();
         if (!target || !p.point || !p.normal) return;
 
-        const primitiveMesh = createPrimitiveMesh(p.shape, p, findThreadStandard(p.threadId));
+        const primitiveMesh = createPrimitiveMesh(p.shape, p, getThreadRenderOptions(p.threadId, p.operation === 'subtract'));
         orientToSurface(primitiveMesh, new THREE.Vector3(...p.point), new THREE.Vector3(...p.normal));
         primitiveMesh.updateMatrix();
 
@@ -436,6 +465,7 @@ export default function Viewport3D() {
       cancelAnimationFrame(frameId);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      renderer.domElement.removeEventListener('pointerdown', onMiddleClickRetarget, { capture: true });
       controls.dispose();
       renderer.dispose();
       container.removeChild(renderer.domElement);
@@ -466,7 +496,7 @@ export default function Viewport3D() {
         const normal = state.hole.normal ? new THREE.Vector3(...state.hole.normal) : new THREE.Vector3(0, 0, 1);
         scene.remove(preview);
         preview.geometry.dispose();
-        const fresh = createHoleCutterMesh(state.hole.diameter, state.hole.depth, findThreadStandard(state.hole.threadId));
+        const fresh = createHoleCutterMesh(state.hole.diameter, state.hole.depth, getThreadRenderOptions(state.hole.threadId, true));
         orientToSurface(fresh, point, normal);
         scene.add(fresh);
         previewMeshRef.current = fresh;
@@ -477,7 +507,11 @@ export default function Viewport3D() {
         const normal = state.primitive.normal ? new THREE.Vector3(...state.primitive.normal) : new THREE.Vector3(0, 0, 1);
         scene.remove(preview);
         preview.geometry.dispose();
-        const fresh = createPrimitiveMesh(state.primitive.shape, state.primitive, findThreadStandard(state.primitive.threadId));
+        const fresh = createPrimitiveMesh(
+          state.primitive.shape,
+          state.primitive,
+          getThreadRenderOptions(state.primitive.threadId, state.primitive.operation === 'subtract'),
+        );
         orientToSurface(fresh, point, normal);
         scene.add(fresh);
         previewMeshRef.current = fresh;

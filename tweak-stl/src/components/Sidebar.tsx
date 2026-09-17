@@ -8,6 +8,7 @@ import {
   type ToolId,
 } from '@/state/useAppStore';
 import { THREAD_STANDARDS, THREAD_SYSTEM_LABELS, findThreadStandard, type ThreadSystem } from '@/utils/threadStandards';
+import { findPrinterProfile, threadPrintabilityWarning } from '@/utils/printerProfiles';
 
 const TOOL_TABS: { id: ToolId; label: string; icon: typeof Info }[] = [
   { id: 'select', label: 'Info', icon: Info },
@@ -86,12 +87,23 @@ function ThreadSelect({ value, onChange }: { value: string | null; onChange: (id
         </select>
       </div>
       {selected && (
-        <p className="text-right text-xs text-slate-500">
-          ⌀{selected.majorDiameterMM.toFixed(3)} mm · {selected.tpi ? `${selected.tpi} TPI` : `${selected.pitchMM.toFixed(2)} mm pitch`}
-        </p>
+        <>
+          <p className="text-right text-xs text-slate-500">
+            ⌀{selected.majorDiameterMM.toFixed(3)} mm · {selected.tpi ? `${selected.tpi} TPI` : `${selected.pitchMM.toFixed(2)} mm pitch`}
+          </p>
+          <ThreadPrintabilityNote majorDiameterMM={selected.majorDiameterMM} pitchMM={selected.pitchMM} />
+        </>
       )}
     </div>
   );
+}
+
+function ThreadPrintabilityNote({ majorDiameterMM, pitchMM }: { majorDiameterMM: number; pitchMM: number }) {
+  const printerProfileId = useAppStore((s) => s.printerProfileId);
+  const profile = findPrinterProfile(printerProfileId);
+  const warning = threadPrintabilityWarning(profile, majorDiameterMM, pitchMM);
+  if (!warning) return null;
+  return <p className="text-xs text-amber-500">{warning}</p>;
 }
 
 function DimensionsReadout() {
