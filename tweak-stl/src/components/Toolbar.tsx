@@ -33,8 +33,8 @@ export default function Toolbar() {
   } = useAppStore();
 
   const handleOpenClick = async () => {
-    if (window.tweakStl) {
-      const opened = await window.tweakStl.openSTL();
+    if (window.stitchMesh) {
+      const opened = await window.stitchMesh.openSTL();
       if (opened) {
         setActiveTool('select');
         viewportActions?.loadSTL(opened.data, opened.fileName);
@@ -62,7 +62,7 @@ export default function Toolbar() {
     <div className="flex h-14 shrink-0 items-center gap-3 border-b border-base-700 bg-base-900 px-4">
       <div className="flex items-center gap-2 pr-3">
         <SquareStack className="h-5 w-5 text-accent-500" />
-        <span className="text-sm font-semibold tracking-wide text-slate-100">TweakSTL</span>
+        <span className="text-sm font-semibold tracking-wide text-slate-100">StitchMesh</span>
       </div>
 
       <div className="h-6 w-px bg-base-700" />

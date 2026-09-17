@@ -4,7 +4,7 @@ import { viteSingleFile } from 'vite-plugin-singlefile';
 import path from 'node:path';
 
 /**
- * Builds TweakSTL as a single, self-contained index.html with everything
+ * Builds StitchMesh as a single, self-contained index.html with everything
  * (JS + CSS) inlined — no Electron, no dev server, no external requests.
  * Opening the file directly (file://) works because there is nothing left
  * for the browser to fetch: an inline <script type="module"> with no

@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { Brush, Evaluator, SUBTRACTION, ADDITION } from 'three-bvh-csg';
+import { createThreadedRodGeometry } from './threadGeometry';
+import type { ThreadStandard } from './threadStandards';
 
 const evaluator = new Evaluator();
 evaluator.useGroups = false;
@@ -81,12 +83,26 @@ export function performCSG(
 
 export { SUBTRACTION, ADDITION };
 
-/** A translucent blue cylinder used to preview the Hole Modifier cutter. */
-export function createHoleCutterMesh(diameter: number, depth: number): THREE.Mesh {
-  const geometry = new THREE.CylinderGeometry(diameter / 2, diameter / 2, depth, 48);
+/** Plain smooth cylinder, or a standard 60° V-thread rod when `thread` is given. */
+function cylinderOrThreadGeometry(diameter: number, length: number, thread?: ThreadStandard | null): THREE.BufferGeometry {
+  if (thread) {
+    return createThreadedRodGeometry({ majorDiameterMM: thread.majorDiameterMM, pitchMM: thread.pitchMM, lengthMM: length });
+  }
+  const geometry = new THREE.CylinderGeometry(diameter / 2, diameter / 2, length, 48);
   // Cylinder is built along Y by default; orient along local Z so it can be
   // aimed using the surface normal like a drill bit.
   geometry.rotateX(Math.PI / 2);
+  return geometry;
+}
+
+/**
+ * A translucent blue cylinder (or threaded rod, see threadGeometry.ts) used
+ * to preview the Hole Modifier cutter. Passing `thread` cuts a standard
+ * internal thread — subtracting this rod's exact profile is how a real tap
+ * carves a matching female thread into a hole.
+ */
+export function createHoleCutterMesh(diameter: number, depth: number, thread?: ThreadStandard | null): THREE.Mesh {
+  const geometry = cylinderOrThreadGeometry(diameter, depth, thread);
   const mesh = new THREE.Mesh(geometry, previewMaterial.clone());
   mesh.name = 'HoleCutterPreview';
   return mesh;
@@ -95,14 +111,14 @@ export function createHoleCutterMesh(diameter: number, depth: number): THREE.Mes
 export function createPrimitiveMesh(
   shape: 'box' | 'cylinder' | 'washer',
   params: { width: number; depth: number; height: number; diameter: number; innerDiameter: number },
+  thread?: ThreadStandard | null,
 ): THREE.Mesh {
   let geometry: THREE.BufferGeometry;
 
   if (shape === 'box') {
     geometry = new THREE.BoxGeometry(params.width, params.depth, params.height);
   } else if (shape === 'cylinder') {
-    geometry = new THREE.CylinderGeometry(params.diameter / 2, params.diameter / 2, params.height, 48);
-    geometry.rotateX(Math.PI / 2);
+    geometry = cylinderOrThreadGeometry(params.diameter, params.height, thread);
   } else {
     // Washer: outer cylinder minus inner cylinder, baked into one geometry via CSG.
     const outerGeo = new THREE.CylinderGeometry(params.diameter / 2, params.diameter / 2, params.height, 48);

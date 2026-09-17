@@ -19,6 +19,8 @@ export interface HoleToolState {
   depth: number;
   point: [number, number, number] | null;
   normal: [number, number, number] | null;
+  /** ThreadStandard id, or null for a plain smooth hole. */
+  threadId: string | null;
 }
 
 export interface PrimitiveToolState {
@@ -32,6 +34,8 @@ export interface PrimitiveToolState {
   placed: boolean;
   point: [number, number, number] | null;
   normal: [number, number, number] | null;
+  /** ThreadStandard id, or null for a plain smooth cylinder. Only applies to the cylinder shape. */
+  threadId: string | null;
 }
 
 export interface PlaneCutState {
@@ -115,6 +119,7 @@ const defaultHole: HoleToolState = {
   depth: 10,
   point: null,
   normal: null,
+  threadId: null,
 };
 
 const defaultPrimitive: PrimitiveToolState = {
@@ -128,6 +133,7 @@ const defaultPrimitive: PrimitiveToolState = {
   placed: false,
   point: null,
   normal: null,
+  threadId: null,
 };
 
 const defaultPlaneCut: PlaneCutState = {
@@ -177,7 +183,10 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({
       activeTool: tool,
       hole: tool === 'hole' ? state.hole : { ...defaultHole },
-      primitive: tool === 'primitive' ? state.primitive : { ...defaultPrimitive, shape: state.primitive.shape, operation: state.primitive.operation },
+      primitive:
+        tool === 'primitive'
+          ? state.primitive
+          : { ...defaultPrimitive, shape: state.primitive.shape, operation: state.primitive.operation, threadId: state.primitive.threadId },
     })),
 
   setTransform: (partial) => set((state) => ({ transform: { ...state.transform, ...partial } })),
@@ -187,7 +196,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   setPrimitive: (partial) => set((state) => ({ primitive: { ...state.primitive, ...partial } })),
   resetPrimitivePlacement: () =>
-    set((state) => ({ primitive: { ...state.primitive, placed: false, point: null, normal: null } })),
+    set((state) => ({
+      primitive: { ...state.primitive, placed: false, point: null, normal: null },
+    })),
 
   setPlaneCut: (partial) => set((state) => ({ planeCut: { ...state.planeCut, ...partial } })),
 }));

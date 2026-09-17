@@ -12,6 +12,6 @@ const api = {
     ipcRenderer.invoke('dialog:saveSTL', buffer, suggestedName),
 };
 
-contextBridge.exposeInMainWorld('tweakStl', api);
+contextBridge.exposeInMainWorld('stitchMesh', api);
 
-export type TweakStlBridge = typeof api;
+export type StitchMeshBridge = typeof api;

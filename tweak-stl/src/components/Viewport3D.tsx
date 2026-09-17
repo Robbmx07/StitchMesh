@@ -12,6 +12,7 @@ import {
   performCSG,
   planeCutMesh,
 } from '@/utils/csgOperations';
+import { findThreadStandard } from '@/utils/threadStandards';
 import { useAppStore, type OrthoView } from '@/state/useAppStore';
 
 const MODEL_COLOR = 0x9ca3af;
@@ -195,10 +196,10 @@ export default function Viewport3D() {
       if (!scene) return;
 
       if (tool === 'hole') {
-        const { diameter, depth } = useAppStore.getState().hole;
+        const { diameter, depth, threadId } = useAppStore.getState().hole;
         if (!previewMeshRef.current || previewMeshRef.current.name !== 'HoleCutterPreview') {
           clearPreview();
-          previewMeshRef.current = createHoleCutterMesh(diameter, depth);
+          previewMeshRef.current = createHoleCutterMesh(diameter, depth, findThreadStandard(threadId));
           scene.add(previewMeshRef.current);
         }
         orientToSurface(previewMeshRef.current, point, normal);
@@ -206,7 +207,7 @@ export default function Viewport3D() {
         const p = useAppStore.getState().primitive;
         if (!previewMeshRef.current || previewMeshRef.current.name !== 'PrimitivePreview') {
           clearPreview();
-          previewMeshRef.current = createPrimitiveMesh(p.shape, p);
+          previewMeshRef.current = createPrimitiveMesh(p.shape, p, findThreadStandard(p.threadId));
           scene.add(previewMeshRef.current);
         }
         orientToSurface(previewMeshRef.current, point, normal);
@@ -298,7 +299,7 @@ export default function Viewport3D() {
         const buffer = (result as unknown as ArrayBufferView).buffer.slice(0) as ArrayBuffer;
 
         const suggested = fileNameRef.current.replace(/\.stl$/i, '') + '-modified.stl';
-        const bridge = (window as unknown as { tweakStl?: { saveSTL: (b: ArrayBuffer, n: string) => Promise<string | null> } }).tweakStl;
+        const bridge = (window as unknown as { stitchMesh?: { saveSTL: (b: ArrayBuffer, n: string) => Promise<string | null> } }).stitchMesh;
         if (bridge) {
           bridge.saveSTL(buffer, suggested);
         } else {
@@ -372,11 +373,11 @@ export default function Viewport3D() {
       },
 
       applyHoleSubtract: () => {
-        const { diameter, depth, point, normal } = useAppStore.getState().hole;
+        const { diameter, depth, point, normal, threadId } = useAppStore.getState().hole;
         const target = getMergedTargetMesh();
         if (!target || !point || !normal) return;
 
-        const cutter = createHoleCutterMesh(diameter, depth);
+        const cutter = createHoleCutterMesh(diameter, depth, findThreadStandard(threadId));
         orientToSurface(cutter, new THREE.Vector3(...point), new THREE.Vector3(...normal));
         cutter.updateMatrix();
 
@@ -399,7 +400,7 @@ export default function Viewport3D() {
         const target = getMergedTargetMesh();
         if (!target || !p.point || !p.normal) return;
 
-        const primitiveMesh = createPrimitiveMesh(p.shape, p);
+        const primitiveMesh = createPrimitiveMesh(p.shape, p, findThreadStandard(p.threadId));
         orientToSurface(primitiveMesh, new THREE.Vector3(...p.point), new THREE.Vector3(...p.normal));
         primitiveMesh.updateMatrix();
 
@@ -465,7 +466,7 @@ export default function Viewport3D() {
         const normal = state.hole.normal ? new THREE.Vector3(...state.hole.normal) : new THREE.Vector3(0, 0, 1);
         scene.remove(preview);
         preview.geometry.dispose();
-        const fresh = createHoleCutterMesh(state.hole.diameter, state.hole.depth);
+        const fresh = createHoleCutterMesh(state.hole.diameter, state.hole.depth, findThreadStandard(state.hole.threadId));
         orientToSurface(fresh, point, normal);
         scene.add(fresh);
         previewMeshRef.current = fresh;
@@ -476,7 +477,7 @@ export default function Viewport3D() {
         const normal = state.primitive.normal ? new THREE.Vector3(...state.primitive.normal) : new THREE.Vector3(0, 0, 1);
         scene.remove(preview);
         preview.geometry.dispose();
-        const fresh = createPrimitiveMesh(state.primitive.shape, state.primitive);
+        const fresh = createPrimitiveMesh(state.primitive.shape, state.primitive, findThreadStandard(state.primitive.threadId));
         orientToSurface(fresh, point, normal);
         scene.add(fresh);
         previewMeshRef.current = fresh;

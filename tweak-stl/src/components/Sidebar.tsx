@@ -7,6 +7,7 @@ import {
   type PrimitiveShape,
   type ToolId,
 } from '@/state/useAppStore';
+import { THREAD_STANDARDS, THREAD_SYSTEM_LABELS, findThreadStandard, type ThreadSystem } from '@/utils/threadStandards';
 
 const TOOL_TABS: { id: ToolId; label: string; icon: typeof Info }[] = [
   { id: 'select', label: 'Info', icon: Info },
@@ -23,6 +24,7 @@ function NumberField({
   step = 0.1,
   min,
   suffix = 'mm',
+  disabled = false,
 }: {
   label: string;
   value: number;
@@ -30,6 +32,7 @@ function NumberField({
   step?: number;
   min?: number;
   suffix?: string;
+  disabled?: boolean;
 }) {
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
     const next = parseFloat(event.target.value);
@@ -39,9 +42,54 @@ function NumberField({
     <div className="field-row">
       <label className="text-sm text-slate-300">{label}</label>
       <div className="flex items-center gap-1">
-        <input type="number" className="num-input" value={value} step={step} min={min} onChange={handleChange} />
+        <input
+          type="number"
+          className="num-input disabled:cursor-not-allowed disabled:opacity-40"
+          value={value}
+          step={step}
+          min={min}
+          disabled={disabled}
+          onChange={handleChange}
+        />
         <span className="w-6 text-xs text-slate-500">{suffix}</span>
       </div>
+    </div>
+  );
+}
+
+const THREAD_SYSTEM_ORDER: ThreadSystem[] = ['metric', 'unc', 'unf'];
+
+/** Dropdown for picking a standard hardware thread size, or "Smooth" for a plain cylinder. */
+function ThreadSelect({ value, onChange }: { value: string | null; onChange: (id: string | null) => void }) {
+  const selected = findThreadStandard(value);
+  const handleChange = (event: ChangeEvent<HTMLSelectElement>) => onChange(event.target.value || null);
+
+  return (
+    <div className="space-y-1">
+      <div className="field-row">
+        <label className="text-sm text-slate-300">Thread</label>
+        <select
+          className="w-40 rounded border border-base-600 bg-base-900 px-2 py-1 text-sm text-slate-200 outline-none focus:border-accent-500"
+          value={value ?? ''}
+          onChange={handleChange}
+        >
+          <option value="">Smooth (no thread)</option>
+          {THREAD_SYSTEM_ORDER.map((system) => (
+            <optgroup key={system} label={THREAD_SYSTEM_LABELS[system]}>
+              {THREAD_STANDARDS.filter((t) => t.system === system).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </div>
+      {selected && (
+        <p className="text-right text-xs text-slate-500">
+          ⌀{selected.majorDiameterMM.toFixed(3)} mm · {selected.tpi ? `${selected.tpi} TPI` : `${selected.pitchMM.toFixed(2)} mm pitch`}
+        </p>
+      )}
     </div>
   );
 }
@@ -159,6 +207,12 @@ function TransformPanel() {
 
 function HolePanel() {
   const { hole, hasModel, setHole, viewportActions } = useAppStore();
+  const selectedThread = findThreadStandard(hole.threadId);
+
+  const handleThreadChange = (id: string | null) => {
+    const thread = findThreadStandard(id);
+    setHole({ threadId: id, ...(thread ? { diameter: thread.majorDiameterMM } : {}) });
+  };
 
   return (
     <div className="panel-section space-y-3">
@@ -169,8 +223,17 @@ function HolePanel() {
         <p className="text-sm text-slate-400">Click a point on the model to place the cutter.</p>
       ) : (
         <>
-          <NumberField label="Diameter" value={hole.diameter} step={0.1} min={0.1} onChange={(v) => setHole({ diameter: v })} />
+          <ThreadSelect value={hole.threadId} onChange={handleThreadChange} />
+          <NumberField
+            label="Diameter"
+            value={hole.diameter}
+            step={0.1}
+            min={0.1}
+            disabled={!!selectedThread}
+            onChange={(v) => setHole({ diameter: v })}
+          />
           <NumberField label="Depth" value={hole.depth} step={0.5} min={0.1} onChange={(v) => setHole({ depth: v })} />
+          {selectedThread && <p className="text-xs text-slate-500">Cuts a standard internal (tapped) thread.</p>}
           <div className="flex gap-2 pt-1">
             <button className="btn-primary flex-1" onClick={() => viewportActions?.applyHoleSubtract()}>
               Apply Boolean Subtract
@@ -198,6 +261,12 @@ const PRIMITIVE_OPS: { id: PrimitiveOp; label: string }[] = [
 
 function PrimitivePanel() {
   const { primitive, hasModel, setPrimitive, viewportActions } = useAppStore();
+  const selectedThread = findThreadStandard(primitive.threadId);
+
+  const handleThreadChange = (id: string | null) => {
+    const thread = findThreadStandard(id);
+    setPrimitive({ threadId: id, ...(thread ? { diameter: thread.majorDiameterMM } : {}) });
+  };
 
   return (
     <div className="panel-section space-y-3">
@@ -239,8 +308,22 @@ function PrimitivePanel() {
           )}
           {primitive.shape === 'cylinder' && (
             <>
-              <NumberField label="Diameter" value={primitive.diameter} min={0.1} onChange={(v) => setPrimitive({ diameter: v })} />
+              <ThreadSelect value={primitive.threadId} onChange={handleThreadChange} />
+              <NumberField
+                label="Diameter"
+                value={primitive.diameter}
+                min={0.1}
+                disabled={!!selectedThread}
+                onChange={(v) => setPrimitive({ diameter: v })}
+              />
               <NumberField label="Height" value={primitive.height} min={0.1} onChange={(v) => setPrimitive({ height: v })} />
+              {selectedThread && (
+                <p className="text-xs text-slate-500">
+                  {primitive.operation === 'union'
+                    ? 'External thread — added to the model as a threaded boss/stud.'
+                    : 'Internal thread — cut into the model as a tapped hole.'}
+                </p>
+              )}
             </>
           )}
           {primitive.shape === 'washer' && (

@@ -1,7 +1,7 @@
 {
-  "name": "tweak-stl",
+  "name": "stitchmesh",
   "version": "0.1.0",
-  "description": "TweakSTL — Offline 3D print modification tool. Modify, don't model.",
+  "description": "StitchMesh — Offline 3D print modification tool. Modify, don't model.",
   "private": true,
   "type": "module",
   "main": "dist-electron/main.js",
@@ -39,8 +39,8 @@
     "vite-plugin-singlefile": "^2.3.3"
   },
   "build": {
-    "appId": "com.tweakstl.app",
-    "productName": "TweakSTL",
+    "appId": "com.stitchmesh.app",
+    "productName": "StitchMesh",
     "files": [
       "dist",
       "dist-electron"

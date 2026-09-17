@@ -1,4 +1,4 @@
-# TweakSTL
+# StitchMesh
 
 Offline desktop tool for making localized modifications to existing `.stl`
 files — resize a hole, punch a slot, bolt on a boss, or split a model in
@@ -62,8 +62,28 @@ modified or overwritten.
 - Uniform/non-uniform scaling, 90° rotation snaps, center-to-origin, and
   drop-to-build-plate
 - **Hole Modifier**: click a point on the model, size a cutting cylinder,
-  and boolean-subtract it
+  and boolean-subtract it — optionally as a standard internal (tapped)
+  thread instead of a smooth hole
 - **Primitive Add/Subtract**: place a block, cylinder, or washer and union
-  or subtract it from the model
+  or subtract it from the model — a cylinder can also be a standard
+  external thread (a threaded boss/stud when added, a tapped hole when
+  subtracted)
 - **Plane Cut**: slice the model into two pieces along an axis-aligned
   plane
+
+## Standard thread sizes
+
+The Hole and Primitive (cylinder) tools have a **Thread** dropdown with
+common hardware sizes — ISO metric (M2–M20) and Unified inch coarse/fine
+(UNC/UNF, #4-40 through 3/4"). Picking a size generates a real helical
+60° V-thread, not just a smooth cylinder at the nominal diameter: the
+crest/root truncation and pitch/minor-diameter relationship follow the
+same fundamental geometry both standards use (ISO 68-1 for metric, ASME
+B1.1 for Unified) —
+H = 0.866025·P, pitch diameter = D − 0.649519·P, minor diameter =
+D − 1.082532·P. See `src/utils/threadGeometry.ts` for the profile math and
+`src/utils/threadStandards.ts` for the size table. An internal (tapped)
+thread and an external (screw) thread are the same nominal profile — the
+same generator is used as a union for a boss/stud or a subtraction for a
+tapped hole, exactly like a real tap cuts the mating shape of the bolt
+it's sized for.
