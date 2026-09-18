@@ -1224,6 +1224,26 @@ export default function Viewport3D() {
 
         const worldPoint = toWorldPoint(mesh, snap.point);
         const worldNormal = toWorldNormal(mesh, snap.normal);
+
+        // If this hole goes all the way through the part, its far end has
+        // its own opening on the opposite face — offer to cut both at once
+        // instead of making the user repeat the click on the back side.
+        // Detected by probing just past the hole's computed far end: a
+        // blind hole still has solid material there (the probe ray, fired
+        // from outside back toward the part, immediately hits that solid
+        // floor); a through-hole is open on the exact centerline all the
+        // way to the near opening, so the probe finds nothing nearby.
+        const axisDir = snap.normal.clone().normalize();
+        const farLocalPoint = snap.point.clone().addScaledVector(axisDir, -snap.lengthMM);
+        const farLocalNormal = axisDir.clone().negate();
+        const worldFarPoint = toWorldPoint(mesh, farLocalPoint);
+        const worldFarNormal = toWorldNormal(mesh, farLocalNormal);
+        const probeDistanceMM = 5;
+        const probeOrigin = worldFarPoint.clone().addScaledVector(worldFarNormal, probeDistanceMM);
+        raycasterRef.current.set(probeOrigin, worldFarNormal.clone().negate());
+        const probeHits = raycasterRef.current.intersectObject(mesh, false);
+        const isThroughHole = probeHits.length === 0 || probeHits[0].distance > probeDistanceMM + 1;
+
         const common = {
           operation: 'subtract' as const,
           threadId: null,
@@ -1233,6 +1253,9 @@ export default function Viewport3D() {
           placed: true,
           editingFeatureId: null,
           referenceHoleDiameterMM: snap.diameterMM,
+          oppositeEndPoint: isThroughHole ? toTuple3(worldFarPoint) : null,
+          oppositeEndNormal: isThroughHole ? toTuple3(worldFarNormal) : null,
+          mirrorToOppositeEnd: false,
         };
 
         if (tool === 'counterbore') {
@@ -1644,6 +1667,32 @@ export default function Viewport3D() {
             height: p.height,
             innerDiameter: p.innerDiameter,
           });
+
+          // Quick Chamfer/Counterbore's "both ends" opt-in: an identical
+          // second cut at the opposite opening of the same through-hole,
+          // so the user doesn't have to repeat the click on the back side.
+          if (p.mirrorToOppositeEnd && p.oppositeEndPoint && p.oppositeEndNormal) {
+            const farLocalPoint = toLocalPoint(mesh, new THREE.Vector3(...p.oppositeEndPoint));
+            const farLocalNormal = toLocalNormal(mesh, new THREE.Vector3(...p.oppositeEndNormal));
+            const farCount = meta.features.filter((f) => f.type === 'primitive').length + 1;
+            meta.features.push({
+              id: generateFeatureId(),
+              type: 'primitive',
+              label: `${p.operation === 'union' ? 'Add' : 'Cut'} ${p.shape} ${farCount} (far end)`,
+              locked: false,
+              visible: true,
+              point: toTuple3(farLocalPoint),
+              normal: toTuple3(farLocalNormal),
+              diameter: p.diameter,
+              depth: p.depth,
+              threadId: p.threadId,
+              shape: p.shape,
+              operation: p.operation,
+              width: p.width,
+              height: p.height,
+              innerDiameter: p.innerDiameter,
+            });
+          }
         }
 
         rebuildPart(partId);

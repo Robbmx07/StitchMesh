@@ -57,6 +57,11 @@ export interface PrimitiveToolState {
   locked: boolean;
   /** Set by Quick Chamfer/Counterbore when this primitive was placed by snapping to an existing hole — the hole's own diameter, shown as a reference and used to warn if the new diameter no longer clears it. Null otherwise (a manually-placed primitive has no such reference). */
   referenceHoleDiameterMM: number | null;
+  /** Set by Quick Chamfer/Counterbore, in world space, when the snapped hole appears to pass all the way through the part (verified with a raycast probe past its far end) — the mirror-image point/normal at that opposite opening. Null when the hole is blind, or for a manually-placed primitive. */
+  oppositeEndPoint: [number, number, number] | null;
+  oppositeEndNormal: [number, number, number] | null;
+  /** User opt-in (only offered when oppositeEndPoint is set): Apply also cuts an identical feature at the opposite opening. */
+  mirrorToOppositeEnd: boolean;
 }
 
 export interface PlaneCutState {
@@ -387,6 +392,9 @@ const defaultPrimitive: PrimitiveToolState = {
   editingFeatureId: null,
   locked: false,
   referenceHoleDiameterMM: null,
+  oppositeEndPoint: null,
+  oppositeEndNormal: null,
+  mirrorToOppositeEnd: false,
 };
 
 const defaultPlaneCut: PlaneCutState = {
@@ -514,7 +522,17 @@ export const useAppStore = create<AppState>((set) => ({
   setPrimitive: (partial) => set((state) => ({ primitive: { ...state.primitive, ...partial } })),
   resetPrimitivePlacement: () =>
     set((state) => ({
-      primitive: { ...state.primitive, placed: false, point: null, normal: null, editingFeatureId: null, referenceHoleDiameterMM: null },
+      primitive: {
+        ...state.primitive,
+        placed: false,
+        point: null,
+        normal: null,
+        editingFeatureId: null,
+        referenceHoleDiameterMM: null,
+        oppositeEndPoint: null,
+        oppositeEndNormal: null,
+        mirrorToOppositeEnd: false,
+      },
     })),
 
   setPlaneCut: (partial) => set((state) => ({ planeCut: { ...state.planeCut, ...partial } })),

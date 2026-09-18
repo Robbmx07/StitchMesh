@@ -491,6 +491,27 @@ function ReferenceHoleWarning({ primitive }: { primitive: PrimitiveToolState }) 
 }
 
 /**
+ * Offered only when Quick Chamfer/Counterbore's through-hole probe (see
+ * Viewport3D) confirmed the snapped hole opens on both faces — lets Apply
+ * cut an identical feature at the opposite opening too, instead of making
+ * the user repeat the click on the back side. Off by default: a single
+ * end is the safer assumption when the user hasn't said otherwise.
+ */
+function BothEndsToggle({ primitive, setPrimitive }: { primitive: PrimitiveToolState; setPrimitive: (p: Partial<PrimitiveToolState>) => void }) {
+  if (!primitive.oppositeEndPoint) return null;
+  return (
+    <div className="field-row pt-1">
+      <label className="text-sm text-slate-300">Also cut the opposite end</label>
+      <input
+        type="checkbox"
+        checked={primitive.mirrorToOppositeEnd}
+        onChange={(e) => setPrimitive({ mirrorToOppositeEnd: e.target.checked })}
+      />
+    </div>
+  );
+}
+
+/**
  * Chamfer and Counterbore aren't tools you configure up front — click near
  * an existing hole and StitchMesh snaps to its true center/axis, reads its
  * diameter, and hands off straight to the Modify panel (shape pre-set,
@@ -519,6 +540,10 @@ function QuickFeaturePanel({ kind }: { kind: 'chamfer' | 'counterbore' }) {
               : 'Opens the Modify panel with a straight recess already centered on that hole, sized for a bolt head to sit in — check Diameter and Depth against your actual hardware, then click Apply.'}
           </p>
           <p className="text-[11px] text-slate-600">Clicking somewhere that isn't close to a hole does nothing — try again closer to its opening.</p>
+          <p className="text-[11px] text-slate-600">
+            If that hole goes all the way through the part, an "Also cut the opposite end" checkbox appears in the Modify panel — check it
+            to {kind} both openings at once.
+          </p>
         </>
       )}
     </div>
@@ -594,6 +619,7 @@ function PrimitivePanel() {
                 </p>
               )}
               <ReferenceHoleWarning primitive={primitive} />
+              <BothEndsToggle primitive={primitive} setPrimitive={setPrimitive} />
             </>
           )}
           {primitive.shape === 'washer' && (
@@ -613,6 +639,7 @@ function PrimitivePanel() {
                 Inner Diameter to match the hole it opens into for a clean blend, no visible step.
               </p>
               <ReferenceHoleWarning primitive={primitive} />
+              <BothEndsToggle primitive={primitive} setPrimitive={setPrimitive} />
             </>
           )}
 

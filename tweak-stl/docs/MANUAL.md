@@ -408,6 +408,14 @@ the same Primitive workflow, just pre-filled.
   the cutter would no longer fully clear the hole it's snapped to. This is
   advisory, not blocking — StitchMesh warns and lets you proceed, same as
   its other geometry warnings (§17, §20).
+- **Both ends, in one click.** If the hole you snapped to goes all the way
+  through the part, an **Also cut the opposite end** checkbox appears
+  below the fields. StitchMesh confirms this automatically — it probes just
+  past the hole's far side to check whether material is actually there —
+  so the checkbox only shows up for a genuine through-hole; a blind hole
+  never offers it. Check it and Apply creates two identical cuts, one at
+  each opening, matched to the hole's own axis on both ends. It's off by
+  default: leave it unchecked for the single-end behavior described above.
 
 ![Counterbore result](manual-assets/10d-quickfeature-counterbore-result.png)
 
@@ -419,6 +427,12 @@ pre-filled, ready for Apply or fine-tuning.*
 *Clicking the Chamfer tool near an 8mm hole hands off to Modify with
 Diameter 10mm, Inner Diameter 8mm (exact match), and Depth 1mm already
 filled in — a 45° bevel by construction. Apply as-is or adjust first.*
+
+![Both ends applied to a through-hole](manual-assets/10f-quickfeature-both-ends.png)
+
+*A through-hole with "Also cut the opposite end" checked — Apply added
+"Cut cylinder 1" at the near opening and "Cut cylinder 2 (far end)" at the
+far one, both from a single click and a single Apply.*
 
 ---
 
