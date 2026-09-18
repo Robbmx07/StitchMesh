@@ -1,11 +1,33 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, Layers, Lock, MapPin, RotateCcw, Trash2, Unlock } from 'lucide-react';
+import { Anchor, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, Layers, Lock, MapPin, RotateCcw, Trash2, Unlock } from 'lucide-react';
 import { useAppStore, type PartFeature } from '@/state/useAppStore';
+import { mmToDisplay, displayToMM, type Units } from '@/utils/units';
+import { useNumberInput } from '@/hooks/useNumberInput';
+
+function OriginAxisInput({ label, valueMM, units, onChange }: { label: string; valueMM: number; units: Units; onChange: (v: number) => void }) {
+  const displayValue = mmToDisplay(valueMM, units);
+  const { text, handleChange, handleFocus, handleBlur } = useNumberInput(displayValue, (v) => onChange(displayToMM(v, units)));
+  return (
+    <div className="flex items-center gap-1">
+      <span className="text-[10px] text-slate-500">{label}</span>
+      <input
+        type="text"
+        inputMode="decimal"
+        className="num-input !w-full !text-xs"
+        value={text}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+        onChange={handleChange}
+      />
+    </div>
+  );
+}
 
 function LocalOriginEditor({ partId, origin }: { partId: string; origin: [number, number, number] }) {
   const viewportActions = useAppStore((s) => s.viewportActions);
   const pickingOrigin = useAppStore((s) => s.pickingOrigin);
   const pickingOriginPartId = useAppStore((s) => s.pickingOriginPartId);
+  const units = useAppStore((s) => s.units);
   const isPicking = pickingOrigin && pickingOriginPartId === partId;
 
   const handleChange = (axisIndex: 0 | 1 | 2, value: number) => {
@@ -38,16 +60,7 @@ function LocalOriginEditor({ partId, origin }: { partId: string; origin: [number
       {isPicking && <p className="text-[11px] text-accent-400">Click a point on this part in the viewport…</p>}
       <div className="grid grid-cols-3 gap-1">
         {(['X', 'Y', 'Z'] as const).map((label, i) => (
-          <div key={label} className="flex items-center gap-1">
-            <span className="text-[10px] text-slate-500">{label}</span>
-            <input
-              type="number"
-              className="num-input !w-full !text-xs"
-              step={0.1}
-              value={origin[i]}
-              onChange={(e) => handleChange(i as 0 | 1 | 2, parseFloat(e.target.value) || 0)}
-            />
-          </div>
+          <OriginAxisInput key={label} label={label} valueMM={origin[i]} units={units} onChange={(v) => handleChange(i as 0 | 1 | 2, v)} />
         ))}
       </div>
       <p className="text-[10px] leading-snug text-slate-600">
@@ -112,6 +125,16 @@ function PartRow({ partId, label }: { partId: string; label: string }) {
         </button>
         <Layers className="h-3.5 w-3.5 shrink-0 text-slate-500" />
         <span className={`flex-1 truncate text-sm ${isSelected ? 'font-medium text-slate-100' : 'text-slate-300'}`}>{label}</span>
+        <button
+          className={`shrink-0 text-slate-500 hover:text-slate-200 ${part?.lockToPlate ? 'text-accent-400' : ''}`}
+          title={part?.lockToPlate ? 'Locked to plate — click to unlock Z' : 'Lock to plate (pins Z, keeps it draggable in X/Y)'}
+          onClick={(e) => {
+            e.stopPropagation();
+            viewportActions?.setLockToPlate(partId, !part?.lockToPlate);
+          }}
+        >
+          <Anchor className="h-3.5 w-3.5" />
+        </button>
       </div>
       {expanded && (
         <div className="px-2 pb-2 pl-6">

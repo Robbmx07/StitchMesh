@@ -1,21 +1,37 @@
 import { ChangeEvent, useEffect } from 'react';
-import { Circle, FlipHorizontal2, Info, Move, Ruler, Scissors, Scale, SquarePlus } from 'lucide-react';
 import {
-  useAppStore,
-  type PlaneAxis,
-  type PrimitiveOp,
-  type PrimitiveShape,
-  type ToolId,
-} from '@/state/useAppStore';
+  Circle,
+  Cone,
+  Cylinder,
+  Flame,
+  FlipHorizontal2,
+  Info,
+  Move,
+  Puzzle,
+  Ruler,
+  Scissors,
+  Scale,
+  Shapes as ShapesIcon,
+  SquarePlus,
+  Torus as TorusIcon,
+  Triangle,
+  Box as BoxIcon,
+} from 'lucide-react';
+import { useAppStore, type PlaneAxis, type PrimitiveOp, type PrimitiveShape, type ToolId, type BasicShape } from '@/state/useAppStore';
 import { THREAD_STANDARDS, THREAD_SYSTEM_LABELS, findThreadStandard, type ThreadSystem } from '@/utils/threadStandards';
 import { findPrinterProfile, threadPrintabilityWarning } from '@/utils/printerProfiles';
+import { mmToDisplay, displayToMM, unitSuffix, type Units } from '@/utils/units';
+import { BASIC_SHAPE_LABELS } from '@/utils/shapeGeometry';
+import { useNumberInput } from '@/hooks/useNumberInput';
 
 const TOOL_TABS: { id: ToolId; label: string; icon: typeof Info }[] = [
   { id: 'select', label: 'Info', icon: Info },
   { id: 'transform', label: 'Transform', icon: Scale },
   { id: 'hole', label: 'Hole', icon: Circle },
   { id: 'primitive', label: 'Primitive', icon: SquarePlus },
+  { id: 'shapes', label: 'Shapes', icon: ShapesIcon },
   { id: 'planeCut', label: 'Cut', icon: Scissors },
+  { id: 'mate', label: 'Mate', icon: Puzzle },
   { id: 'move', label: 'Move', icon: Move },
   { id: 'measure', label: 'Measure', icon: Ruler },
 ];
@@ -49,37 +65,39 @@ function NumberField({
   label,
   value,
   onChange,
-  step = 0.1,
-  min,
-  suffix = 'mm',
+  suffix,
   disabled = false,
+  kind = 'length',
 }: {
   label: string;
   value: number;
   onChange: (value: number) => void;
-  step?: number;
-  min?: number;
   suffix?: string;
   disabled?: boolean;
+  /** 'length' converts to/from the app's mm/in unit setting; 'plain' passes the value through untouched (degrees, counts, …). */
+  kind?: 'length' | 'plain';
 }) {
-  const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const next = parseFloat(event.target.value);
-    onChange(Number.isFinite(next) ? next : 0);
-  };
+  const units = useAppStore((s) => s.units);
+  const displayValue = kind === 'length' ? mmToDisplay(value, units) : value;
+  const handleValueChange = (v: number) => onChange(kind === 'length' ? displayToMM(v, units) : v);
+  const { text, handleChange, handleFocus, handleBlur } = useNumberInput(displayValue, handleValueChange);
+  const resolvedSuffix = suffix ?? (kind === 'length' ? unitSuffix(units) : '');
+
   return (
     <div className="field-row">
       <label className="text-sm text-slate-300">{label}</label>
       <div className="flex items-center gap-1">
         <input
-          type="number"
+          type="text"
+          inputMode="decimal"
           className="num-input disabled:cursor-not-allowed disabled:opacity-40"
-          value={value}
-          step={step}
-          min={min}
+          value={text}
           disabled={disabled}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
           onChange={handleChange}
         />
-        <span className="w-6 text-xs text-slate-500">{suffix}</span>
+        {resolvedSuffix && <span className="w-6 text-xs text-slate-500">{resolvedSuffix}</span>}
       </div>
     </div>
   );
@@ -135,11 +153,42 @@ function ThreadPrintabilityNote({ majorDiameterMM, pitchMM }: { majorDiameterMM:
 
 /** Read-only reference readout: how far a pending/edited placement sits from the target part's own bounding-box center — matches the cyan centerlines drawn in the viewport. */
 function CenterOffsetNote({ centerOffset }: { centerOffset: [number, number, number] | null }) {
+  const units = useAppStore((s) => s.units);
   if (!centerOffset) return null;
+  const fmt = (mm: number) => `${mmToDisplay(mm, units).toFixed(units === 'in' ? 3 : 2)} ${unitSuffix(units)}`;
   return (
     <p className="text-[11px] text-slate-500">
-      Δ from part center — X: {centerOffset[0].toFixed(2)}, Y: {centerOffset[1].toFixed(2)}, Z: {centerOffset[2].toFixed(2)} mm
+      Δ from part center — X: {fmt(centerOffset[0])}, Y: {fmt(centerOffset[1])}, Z: {fmt(centerOffset[2])}
     </p>
+  );
+}
+
+function OffsetAxisInput({
+  axis,
+  valueMM,
+  units,
+  onChange,
+}: {
+  axis: PlaneAxis;
+  valueMM: number;
+  units: Units;
+  onChange: (axis: PlaneAxis, value: number) => void;
+}) {
+  const displayValue = mmToDisplay(valueMM, units);
+  const { text, handleChange, handleFocus, handleBlur } = useNumberInput(displayValue, (v) => onChange(axis, displayToMM(v, units)));
+  return (
+    <div className="flex items-center gap-1">
+      <span className="text-[10px] uppercase text-slate-500">{axis}</span>
+      <input
+        type="text"
+        inputMode="decimal"
+        className="num-input !w-full !text-xs"
+        value={text}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+        onChange={handleChange}
+      />
+    </div>
   );
 }
 
@@ -151,22 +200,14 @@ function OffsetFields({
   localOffset: [number, number, number] | null;
   onChange: (axis: PlaneAxis, value: number) => void;
 }) {
+  const units = useAppStore((s) => s.units);
   if (!localOffset) return null;
   return (
     <div className="space-y-1">
       <div className="panel-label !mb-1">Offset from local origin</div>
       <div className="grid grid-cols-3 gap-1.5">
         {(['x', 'y', 'z'] as const).map((axis, i) => (
-          <div key={axis} className="flex items-center gap-1">
-            <span className="text-[10px] uppercase text-slate-500">{axis}</span>
-            <input
-              type="number"
-              className="num-input !w-full !text-xs"
-              step={0.1}
-              value={localOffset[i]}
-              onChange={(e) => onChange(axis, parseFloat(e.target.value) || 0)}
-            />
-          </div>
+          <OffsetAxisInput key={axis} axis={axis} valueMM={localOffset[i]} units={units} onChange={onChange} />
         ))}
       </div>
       <p className="text-[10px] leading-snug text-slate-600">
@@ -179,6 +220,7 @@ function OffsetFields({
 function DimensionsReadout() {
   const dimensions = useAppStore((s) => s.dimensions);
   const hasModel = useAppStore((s) => s.hasModel);
+  const units = useAppStore((s) => s.units);
   return (
     <div className="panel-section">
       <div className="panel-label">Bounding Box</div>
@@ -187,7 +229,9 @@ function DimensionsReadout() {
           {(['x', 'y', 'z'] as const).map((axis) => (
             <div key={axis} className="rounded-md border border-base-700 bg-base-900 py-2">
               <div className="text-[10px] uppercase tracking-wide text-slate-500">{axis}</div>
-              <div className="text-sm font-medium text-slate-200">{dimensions[axis].toFixed(1)}</div>
+              <div className="text-sm font-medium text-slate-200">
+                {mmToDisplay(dimensions[axis], units).toFixed(units === 'in' ? 3 : 1)}
+              </div>
             </div>
           ))}
         </div>
@@ -250,9 +294,12 @@ function TransformPanel() {
             onChange={(e) => setTransform({ uniformScale: e.target.checked })}
           />
         </div>
-        <NumberField label="Width (X)" value={dimensions.x} onChange={(v) => handleAxisChange('x', v)} min={0.1} />
-        <NumberField label="Depth (Y)" value={dimensions.y} onChange={(v) => handleAxisChange('y', v)} min={0.1} />
-        <NumberField label="Height (Z)" value={dimensions.z} onChange={(v) => handleAxisChange('z', v)} min={0.1} />
+        <NumberField label="Width (X)" value={dimensions.x} onChange={(v) => handleAxisChange('x', v)} />
+        <NumberField label="Depth (Y)" value={dimensions.y} onChange={(v) => handleAxisChange('y', v)} />
+        <NumberField label="Height (Z)" value={dimensions.z} onChange={(v) => handleAxisChange('z', v)} />
+        <p className="text-[11px] text-slate-500">
+          Scaling permanently folds this part's existing Hole/Primitive features into its base shape — see the Parts panel.
+        </p>
       </div>
 
       <div className="panel-section">
@@ -285,13 +332,7 @@ function TransformPanel() {
               <option value="y">Y</option>
               <option value="z">Z</option>
             </select>
-            <input
-              type="number"
-              className="num-input"
-              value={transform.freeRotateDegrees}
-              step={1}
-              onChange={(e) => setTransform({ freeRotateDegrees: parseFloat(e.target.value) || 0 })}
-            />
+            <FreeAngleInput value={transform.freeRotateDegrees} onChange={(v) => setTransform({ freeRotateDegrees: v })} />
             <span className="text-xs text-slate-500">°</span>
           </div>
         </div>
@@ -335,6 +376,21 @@ function TransformPanel() {
   );
 }
 
+function FreeAngleInput({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const { text, handleChange, handleFocus, handleBlur } = useNumberInput(value, onChange, 2);
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      className="num-input"
+      value={text}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+      onChange={handleChange}
+    />
+  );
+}
+
 function HolePanel() {
   const { hole, hasModel, parts, setHole, viewportActions } = useAppStore();
   const selectedThread = findThreadStandard(hole.threadId);
@@ -363,15 +419,8 @@ function HolePanel() {
       ) : (
         <>
           <ThreadSelect value={hole.threadId} onChange={handleThreadChange} />
-          <NumberField
-            label="Diameter"
-            value={hole.diameter}
-            step={0.1}
-            min={0.1}
-            disabled={!!selectedThread}
-            onChange={(v) => setHole({ diameter: v })}
-          />
-          <NumberField label="Depth" value={hole.depth} step={0.5} min={0.1} onChange={(v) => setHole({ depth: v })} />
+          <NumberField label="Diameter" value={hole.diameter} disabled={!!selectedThread} onChange={(v) => setHole({ diameter: v })} />
+          <NumberField label="Depth" value={hole.depth} onChange={(v) => setHole({ depth: v })} />
           {selectedThread && <p className="text-xs text-slate-500">Cuts a standard internal (tapped) thread.</p>}
           {targetLabel && <p className="text-xs text-slate-500">Targeting: {targetLabel}</p>}
           <CenterOffsetNote centerOffset={hole.centerOffset} />
@@ -462,22 +511,16 @@ function PrimitivePanel() {
 
           {primitive.shape === 'box' && (
             <>
-              <NumberField label="Width (X)" value={primitive.width} min={0.1} onChange={(v) => setPrimitive({ width: v })} />
-              <NumberField label="Depth (Y)" value={primitive.depth} min={0.1} onChange={(v) => setPrimitive({ depth: v })} />
-              <NumberField label="Height (Z)" value={primitive.height} min={0.1} onChange={(v) => setPrimitive({ height: v })} />
+              <NumberField label="Width (X)" value={primitive.width} onChange={(v) => setPrimitive({ width: v })} />
+              <NumberField label="Depth (Y)" value={primitive.depth} onChange={(v) => setPrimitive({ depth: v })} />
+              <NumberField label="Height (Z)" value={primitive.height} onChange={(v) => setPrimitive({ height: v })} />
             </>
           )}
           {primitive.shape === 'cylinder' && (
             <>
               <ThreadSelect value={primitive.threadId} onChange={handleThreadChange} />
-              <NumberField
-                label="Diameter"
-                value={primitive.diameter}
-                min={0.1}
-                disabled={!!selectedThread}
-                onChange={(v) => setPrimitive({ diameter: v })}
-              />
-              <NumberField label="Height" value={primitive.height} min={0.1} onChange={(v) => setPrimitive({ height: v })} />
+              <NumberField label="Diameter" value={primitive.diameter} disabled={!!selectedThread} onChange={(v) => setPrimitive({ diameter: v })} />
+              <NumberField label="Height" value={primitive.height} onChange={(v) => setPrimitive({ height: v })} />
               {selectedThread && (
                 <p className="text-xs text-slate-500">
                   {primitive.operation === 'union'
@@ -489,14 +532,9 @@ function PrimitivePanel() {
           )}
           {primitive.shape === 'washer' && (
             <>
-              <NumberField label="Outer Diameter" value={primitive.diameter} min={0.1} onChange={(v) => setPrimitive({ diameter: v })} />
-              <NumberField
-                label="Inner Diameter"
-                value={primitive.innerDiameter}
-                min={0.1}
-                onChange={(v) => setPrimitive({ innerDiameter: v })}
-              />
-              <NumberField label="Height" value={primitive.height} min={0.1} onChange={(v) => setPrimitive({ height: v })} />
+              <NumberField label="Outer Diameter" value={primitive.diameter} onChange={(v) => setPrimitive({ diameter: v })} />
+              <NumberField label="Inner Diameter" value={primitive.innerDiameter} onChange={(v) => setPrimitive({ innerDiameter: v })} />
+              <NumberField label="Height" value={primitive.height} onChange={(v) => setPrimitive({ height: v })} />
             </>
           )}
 
@@ -538,6 +576,85 @@ function PrimitivePanel() {
   );
 }
 
+const BASIC_SHAPES: { id: BasicShape; icon: typeof BoxIcon }[] = [
+  { id: 'box', icon: BoxIcon },
+  { id: 'cylinder', icon: Cylinder },
+  { id: 'sphere', icon: Circle },
+  { id: 'cone', icon: Cone },
+  { id: 'pyramid', icon: Triangle },
+  { id: 'torus', icon: TorusIcon },
+];
+
+function ShapesPanel() {
+  const { shapeTool, hasModel, setShapeTool, viewportActions } = useAppStore();
+
+  return (
+    <div className="panel-section space-y-3">
+      <div className="panel-label">Shapes Toolbox</div>
+      <p className="text-xs text-slate-500">Adds a brand-new independent part built from a basic solid — not a modifier on the current part.</p>
+      <div className="grid grid-cols-3 gap-1.5">
+        {BASIC_SHAPES.map(({ id, icon: Icon }) => (
+          <button
+            key={id}
+            className={`btn flex flex-col items-center gap-1 !py-2 ${shapeTool.shape === id ? 'btn-icon-active border' : ''}`}
+            onClick={() => setShapeTool({ shape: id })}
+          >
+            <Icon className="h-4 w-4" />
+            <span className="text-[11px]">{BASIC_SHAPE_LABELS[id]}</span>
+          </button>
+        ))}
+      </div>
+
+      {shapeTool.shape === 'box' && (
+        <>
+          <NumberField label="Width (X)" value={shapeTool.width} onChange={(v) => setShapeTool({ width: v })} />
+          <NumberField label="Depth (Y)" value={shapeTool.depth} onChange={(v) => setShapeTool({ depth: v })} />
+          <NumberField label="Height (Z)" value={shapeTool.height} onChange={(v) => setShapeTool({ height: v })} />
+        </>
+      )}
+      {(shapeTool.shape === 'cylinder' || shapeTool.shape === 'cone' || shapeTool.shape === 'pyramid') && (
+        <>
+          <NumberField label="Diameter" value={shapeTool.diameter} onChange={(v) => setShapeTool({ diameter: v })} />
+          <NumberField label="Height" value={shapeTool.height} onChange={(v) => setShapeTool({ height: v })} />
+        </>
+      )}
+      {shapeTool.shape === 'sphere' && <NumberField label="Diameter" value={shapeTool.diameter} onChange={(v) => setShapeTool({ diameter: v })} />}
+      {shapeTool.shape === 'torus' && (
+        <>
+          <NumberField label="Outer Diameter" value={shapeTool.diameter} onChange={(v) => setShapeTool({ diameter: v })} />
+          <NumberField label="Tube Diameter" value={shapeTool.tubeDiameter} onChange={(v) => setShapeTool({ tubeDiameter: v })} />
+        </>
+      )}
+
+      <div className="field-row pt-1">
+        <label className="text-sm text-slate-300">Split in half on create</label>
+        <input
+          type="checkbox"
+          checked={shapeTool.splitOnCreate}
+          onChange={(e) => setShapeTool({ splitOnCreate: e.target.checked })}
+        />
+      </div>
+      {shapeTool.splitOnCreate && (
+        <div className="grid grid-cols-3 gap-1">
+          {(['x', 'y', 'z'] as const).map((axis) => (
+            <button
+              key={axis}
+              className={`btn ${shapeTool.splitAxis === axis ? 'btn-icon-active border' : ''}`}
+              onClick={() => setShapeTool({ splitAxis: axis })}
+            >
+              {axis.toUpperCase()} axis
+            </button>
+          ))}
+        </div>
+      )}
+
+      <button className="btn-primary w-full" onClick={() => viewportActions?.addBasicShape()} disabled={!viewportActions}>
+        {hasModel ? 'Add to Scene' : 'Add Shape'}
+      </button>
+    </div>
+  );
+}
+
 const PLANE_AXES: { id: PlaneAxis; label: string }[] = [
   { id: 'x', label: 'X' },
   { id: 'y', label: 'Y' },
@@ -575,11 +692,7 @@ function PlaneCutPanel() {
               </button>
             ))}
           </div>
-          <NumberField
-            label={`${planeCut.axis.toUpperCase()} Height`}
-            value={planeCut.height}
-            onChange={(v) => setPlaneCut({ height: v })}
-          />
+          <NumberField label={`${planeCut.axis.toUpperCase()} Height`} value={planeCut.height} onChange={(v) => setPlaneCut({ height: v })} />
           <p className="text-xs text-slate-500">
             Splits the model into two pieces along the {planeCut.axis.toUpperCase()} axis at the given position.
           </p>
@@ -592,8 +705,120 @@ function PlaneCutPanel() {
   );
 }
 
+function MatePanel() {
+  const { hasModel, parts, mate, viewportActions } = useAppStore();
+
+  if (!hasModel) {
+    return (
+      <div className="panel-section">
+        <div className="panel-label">Mate</div>
+        <p className="text-sm text-slate-500">Load a model first.</p>
+      </div>
+    );
+  }
+  if (parts.length < 2) {
+    return (
+      <div className="panel-section">
+        <div className="panel-label">Mate</div>
+        <p className="text-sm text-slate-500">Add a second part (Add Part, Shapes, or Plane Cut) before mating two parts together.</p>
+      </div>
+    );
+  }
+
+  const labelOf = (partId: string | undefined) => parts.find((p) => p.id === partId)?.label ?? '…';
+
+  return (
+    <div className="panel-section space-y-3">
+      <div className="panel-label">Mate</div>
+
+      {mate.stage === 'pickA' && <p className="text-sm text-slate-400">Click a face on the FIRST (stationary) part.</p>}
+      {mate.stage === 'pickB' && (
+        <>
+          <p className="text-xs text-slate-500">Part A: {labelOf(mate.a?.partId)}</p>
+          <p className="text-sm text-slate-400">Now click a face on the SECOND part to mate to it.</p>
+        </>
+      )}
+      {mate.stage === 'ready' && (
+        <>
+          <p className="text-xs text-slate-500">
+            Part A: {labelOf(mate.a?.partId)} · Part B: {labelOf(mate.b?.partId)}
+          </p>
+          <p className="text-sm text-slate-400">
+            {mate.fitted ? 'Fitted — B is now flush against A, facing it.' : 'Click Fit to rotate and slide B flush against A, facing it.'}
+          </p>
+          <div className="flex gap-2">
+            <button className="btn-primary flex-1" onClick={() => viewportActions?.applyMateFit()}>
+              {mate.fitted ? 'Re-fit' : 'Fit'}
+            </button>
+            <button className="btn" onClick={() => viewportActions?.cancelMate()}>
+              Start Over
+            </button>
+          </div>
+
+          {mate.fitted && (
+            <div className="space-y-2 border-t border-base-700 pt-3">
+              <div className="panel-label !mb-1">Flush Edge (optional)</div>
+              <p className="text-[11px] text-slate-500">
+                Click a reference point near an edge/corner on each part, then Align Edge — slides B within the mated plane so the two points line
+                up.
+              </p>
+              <button
+                className="btn w-full"
+                onClick={() => useAppStore.getState().setMate({ stage: 'pickEdgeA', edgeA: null, edgeB: null })}
+              >
+                Pick Edge Points
+              </button>
+              <div className="flex gap-2">
+                <button className="btn-primary flex-1" onClick={() => viewportActions?.weldMatedParts()}>
+                  <Flame className="mr-1 inline h-3.5 w-3.5" />
+                  Weld
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Weld permanently merges A and B into one part (a real boolean union) — they can no longer be moved independently afterward.
+              </p>
+            </div>
+          )}
+        </>
+      )}
+      {(mate.stage === 'pickEdgeA' || mate.stage === 'pickEdgeB') && (
+        <>
+          <p className="text-sm text-slate-400">
+            {mate.stage === 'pickEdgeA'
+              ? `Click a reference point near an edge on Part A (${labelOf(mate.a?.partId)}).`
+              : `Now click the matching reference point on Part B (${labelOf(mate.b?.partId)}).`}
+          </p>
+          <button className="btn w-full" onClick={() => useAppStore.getState().setMate({ stage: 'ready', edgeA: null, edgeB: null })}>
+            Cancel Edge Pick
+          </button>
+        </>
+      )}
+      {mate.stage === 'edgeReady' && (
+        <>
+          <p className="text-sm text-slate-400">Both edge points picked.</p>
+          <div className="flex gap-2">
+            <button className="btn-primary flex-1" onClick={() => viewportActions?.applyFlushEdge()}>
+              Align Edge
+            </button>
+            <button className="btn" onClick={() => useAppStore.getState().setMate({ stage: 'ready', edgeA: null, edgeB: null })}>
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+
+      {mate.stage === 'pickB' && (
+        <button className="btn w-full" onClick={() => viewportActions?.cancelMate()}>
+          Start Over
+        </button>
+      )}
+    </div>
+  );
+}
+
 function MovePanel() {
-  const { hasModel, parts, selectedPartId, selectedPartPosition, snapToGrid, snapGridSizeMM, setSnapToGrid, viewportActions } = useAppStore();
+  const { hasModel, parts, selectedPartId, selectedPartPosition, snapToGrid, snapGridSizeMM, units, setSnapToGrid, viewportActions } =
+    useAppStore();
 
   if (!hasModel) {
     return (
@@ -605,7 +830,8 @@ function MovePanel() {
   }
 
   const position = selectedPartPosition ?? [0, 0, 0];
-  const nudgeAmount = snapToGrid ? snapGridSizeMM : 1;
+  const selectedPart = parts.find((p) => p.id === selectedPartId);
+  const nudgeAmountMM = snapToGrid ? snapGridSizeMM : 1;
 
   const handlePositionChange = (axisIndex: 0 | 1 | 2, value: number) => {
     if (!selectedPartId) return;
@@ -620,18 +846,28 @@ function MovePanel() {
       <PartSelector />
       {parts.length <= 1 && (
         <p className="text-xs text-slate-500">
-          Only one part in the scene — Plane Cut produces two independently movable parts, or use Primitive to add another part.
+          Only one part in the scene — Plane Cut produces two independently movable parts, or use Shapes/Add Part to add another.
         </p>
       )}
-      <NumberField label="Position X" value={position[0]} step={0.5} onChange={(v) => handlePositionChange(0, v)} />
-      <NumberField label="Position Y" value={position[1]} step={0.5} onChange={(v) => handlePositionChange(1, v)} />
-      <NumberField label="Position Z" value={position[2]} step={0.5} onChange={(v) => handlePositionChange(2, v)} />
+      <p className="text-[11px] text-slate-500">
+        Drag the arrows on the selected part directly in the viewport, or type exact positions below.
+      </p>
+      <NumberField label="Position X" value={position[0]} onChange={(v) => handlePositionChange(0, v)} />
+      <NumberField label="Position Y" value={position[1]} onChange={(v) => handlePositionChange(1, v)} />
+      <NumberField label="Position Z" value={position[2]} disabled={!!selectedPart?.lockToPlate} onChange={(v) => handlePositionChange(2, v)} />
+      {selectedPart?.lockToPlate && (
+        <p className="text-[11px] text-amber-500">Locked to plate — Z stays pinned to the build plate. Toggle it off in the Parts panel to move it.</p>
+      )}
 
       <div className="field-row">
         <label className="text-sm text-slate-300">Snap to grid</label>
         <input type="checkbox" checked={snapToGrid} onChange={(e) => setSnapToGrid(e.target.checked)} />
       </div>
-      {snapToGrid && <p className="text-right text-xs text-slate-500">{snapGridSizeMM} mm grid</p>}
+      {snapToGrid && (
+        <p className="text-right text-xs text-slate-500">
+          {mmToDisplay(snapGridSizeMM, units).toFixed(units === 'in' ? 3 : 1)} {unitSuffix(units)} grid
+        </p>
+      )}
 
       <div className="grid grid-cols-3 gap-2 pt-1">
         {(['x', 'y', 'z'] as const).map((axis) => (
@@ -640,15 +876,15 @@ function MovePanel() {
             <div className="flex gap-1">
               <button
                 className="btn"
-                disabled={!selectedPartId}
-                onClick={() => selectedPartId && viewportActions?.nudgePart(selectedPartId, axis, -nudgeAmount)}
+                disabled={!selectedPartId || (axis === 'z' && selectedPart?.lockToPlate)}
+                onClick={() => selectedPartId && viewportActions?.nudgePart(selectedPartId, axis, -nudgeAmountMM)}
               >
                 −
               </button>
               <button
                 className="btn"
-                disabled={!selectedPartId}
-                onClick={() => selectedPartId && viewportActions?.nudgePart(selectedPartId, axis, nudgeAmount)}
+                disabled={!selectedPartId || (axis === 'z' && selectedPart?.lockToPlate)}
+                onClick={() => selectedPartId && viewportActions?.nudgePart(selectedPartId, axis, nudgeAmountMM)}
               >
                 +
               </button>
@@ -661,7 +897,7 @@ function MovePanel() {
 }
 
 function MeasurePanel() {
-  const { hasModel, measure, viewportActions } = useAppStore();
+  const { hasModel, measure, units, viewportActions } = useAppStore();
 
   if (!hasModel) {
     return (
@@ -679,6 +915,7 @@ function MeasurePanel() {
     delta = [point[0] - datum[0], point[1] - datum[1], point[2] - datum[2]];
     distance = Math.sqrt(delta[0] ** 2 + delta[1] ** 2 + delta[2] ** 2);
   }
+  const fmt = (mm: number) => mmToDisplay(mm, units).toFixed(units === 'in' ? 3 : 2);
 
   return (
     <div className="panel-section space-y-3">
@@ -687,21 +924,27 @@ function MeasurePanel() {
         <p className="text-sm text-slate-400">Click a point on the model to set the datum (reference origin).</p>
       ) : !point ? (
         <>
-          <p className="text-xs text-slate-500">Datum: {datum.map((v) => v.toFixed(2)).join(', ')} mm</p>
+          <p className="text-xs text-slate-500">
+            Datum: {datum.map((v) => fmt(v)).join(', ')} {unitSuffix(units)}
+          </p>
           <p className="text-sm text-slate-400">Click another point to measure from the datum.</p>
         </>
       ) : (
         <>
-          <p className="text-xs text-slate-500">Datum: {datum.map((v) => v.toFixed(2)).join(', ')} mm</p>
+          <p className="text-xs text-slate-500">
+            Datum: {datum.map((v) => fmt(v)).join(', ')} {unitSuffix(units)}
+          </p>
           <div className="rounded-md border border-base-700 bg-base-900 p-3 text-center">
             <div className="text-[10px] uppercase tracking-wide text-slate-500">Distance</div>
-            <div className="text-lg font-semibold text-slate-100">{distance!.toFixed(3)} mm</div>
+            <div className="text-lg font-semibold text-slate-100">
+              {fmt(distance!)} {unitSuffix(units)}
+            </div>
           </div>
           <div className="grid grid-cols-3 gap-2 text-center">
             {(['ΔX', 'ΔY', 'ΔZ'] as const).map((label, i) => (
               <div key={label} className="rounded-md border border-base-700 bg-base-900 py-2">
                 <div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
-                <div className="text-sm font-medium text-slate-200">{delta![i].toFixed(2)}</div>
+                <div className="text-sm font-medium text-slate-200">{fmt(delta![i])}</div>
               </div>
             ))}
           </div>
@@ -745,7 +988,9 @@ export default function Sidebar() {
       {activeTool === 'transform' && <TransformPanel />}
       {activeTool === 'hole' && <HolePanel />}
       {activeTool === 'primitive' && <PrimitivePanel />}
+      {activeTool === 'shapes' && <ShapesPanel />}
       {activeTool === 'planeCut' && <PlaneCutPanel />}
+      {activeTool === 'mate' && <MatePanel />}
       {activeTool === 'move' && <MovePanel />}
       {activeTool === 'measure' && <MeasurePanel />}
     </div>

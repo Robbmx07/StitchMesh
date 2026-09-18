@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useAppStore, type OrthoView } from '@/state/useAppStore';
 import { PRINTER_PROFILES, GENERIC_PRINTER_ID } from '@/utils/printerProfiles';
+import type { Units } from '@/utils/units';
 
 const ORTHO_VIEWS: { id: OrthoView; label: string }[] = [
   { id: 'top', label: 'Top' },
@@ -46,6 +47,8 @@ export default function Toolbar() {
     canRedo,
     meshIssues,
     dismissMeshIssue,
+    units,
+    setUnits,
   } = useAppStore();
 
   const handleOpenClick = async () => {
@@ -212,6 +215,21 @@ export default function Toolbar() {
         >
           <Layers className="h-4 w-4" />
         </button>
+      </div>
+
+      <div className="h-6 w-px bg-base-700" />
+
+      <div className="flex items-center overflow-hidden rounded border border-base-600 text-sm">
+        {(['mm', 'in'] as Units[]).map((u) => (
+          <button
+            key={u}
+            title={u === 'mm' ? 'Millimeters' : 'Inches'}
+            className={`px-2 py-1 ${units === u ? 'bg-accent-500 text-white' : 'bg-base-900 text-slate-300 hover:bg-base-800'}`}
+            onClick={() => setUnits(u)}
+          >
+            {u}
+          </button>
+        ))}
       </div>
 
       <div className="ml-auto flex items-center gap-3">

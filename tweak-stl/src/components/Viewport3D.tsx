@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { STLExporter } from 'three/addons/exporters/STLExporter.js';
 import {
@@ -13,6 +14,7 @@ import {
   rebuildCompositeGeometry,
   type ThreadRenderOptions,
 } from '@/utils/csgOperations';
+import { createBasicShapeGeometry, BASIC_SHAPE_LABELS } from '@/utils/shapeGeometry';
 import { findThreadStandard } from '@/utils/threadStandards';
 import { findPrinterProfile, recommendedThreadResolution } from '@/utils/printerProfiles';
 import { validateGeometry, repairWindingConsistency, mirrorGeometry, hasRepairableIssues, hasUnrepairableIssues } from '@/utils/meshRepair';
@@ -23,6 +25,7 @@ import {
   type MeshIssues,
   type PartFeature,
   type PartInfo,
+  type MateAnchor,
 } from '@/state/useAppStore';
 
 const MODEL_COLOR = 0x9ca3af;
@@ -59,6 +62,7 @@ function generateFeatureId(): string {
   return `feature-${Date.now()}-${featureIdCounter}`;
 }
 
+
 /**
  * Per-part authoring state, kept outside React/Zustand: a stable "base"
  * geometry (the imported shape, or the shape as of the last destructive
@@ -73,6 +77,7 @@ interface PartMeta {
   baseGeometry: THREE.BufferGeometry;
   features: PartFeature[];
   localOrigin: THREE.Vector3;
+  lockToPlate: boolean;
 }
 
 interface HistoryMeshSnapshot {
@@ -81,9 +86,14 @@ interface HistoryMeshSnapshot {
   baseGeometry: THREE.BufferGeometry;
   features: PartFeature[];
   localOrigin: [number, number, number];
+  lockToPlate: boolean;
   position: [number, number, number];
   quaternion: [number, number, number, number];
   scale: [number, number, number];
+}
+
+function freshPartMeta(baseGeometry: THREE.BufferGeometry): PartMeta {
+  return { baseGeometry, features: [], localOrigin: new THREE.Vector3(0, 0, 0), lockToPlate: false };
 }
 
 interface HistorySnapshot {
@@ -113,6 +123,11 @@ export default function Viewport3D() {
   const pointMarkerRef = useRef<THREE.Object3D | null>(null);
   const measureLineRef = useRef<THREE.Line | null>(null);
   const partMetaRef = useRef<Map<string, PartMeta>>(new Map());
+  const mateMarkerARef = useRef<THREE.Object3D | null>(null);
+  const mateMarkerBRef = useRef<THREE.Object3D | null>(null);
+  const transformControlsRef = useRef<TransformControls | null>(null);
+  const gizmoSceneRef = useRef<THREE.Scene | null>(null);
+  const gizmoCameraRef = useRef<THREE.OrthographicCamera | null>(null);
 
   // ---- part bookkeeping (each mesh carries userData.partId/partLabel) --
   const getAllPartMeshes = (): THREE.Mesh[] =>
@@ -215,8 +230,9 @@ export default function Viewport3D() {
       if (m.userData.partId) seen.set(m.userData.partId, m.userData.partLabel ?? m.userData.partId);
     });
     const parts: PartInfo[] = Array.from(seen.entries()).map(([id, label]) => {
-      const origin = getPartMeta(id)?.localOrigin ?? new THREE.Vector3(0, 0, 0);
-      return { id, label, localOrigin: toTuple3(origin) };
+      const meta = getPartMeta(id);
+      const origin = meta?.localOrigin ?? new THREE.Vector3(0, 0, 0);
+      return { id, label, localOrigin: toTuple3(origin), lockToPlate: meta?.lockToPlate ?? false };
     });
     useAppStore.getState().setParts(parts);
     seen.forEach((_, id) => syncPartFeaturesToStore(id));
@@ -294,6 +310,27 @@ export default function Viewport3D() {
 
     scene.add(group);
     centerlineGroupRef.current = group;
+  };
+
+  const clearMateMarkers = () => {
+    const scene = sceneRef.current;
+    [mateMarkerARef, mateMarkerBRef].forEach((ref) => {
+      if (ref.current && scene) scene.remove(ref.current);
+      ref.current = null;
+    });
+  };
+
+  const showMateMarker = (which: 'a' | 'b', point: THREE.Vector3) => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const ref = which === 'a' ? mateMarkerARef : mateMarkerBRef;
+    if (ref.current) scene.remove(ref.current);
+    const color = which === 'a' ? 0x8b5cf6 : 0xf59e0b;
+    const marker = new THREE.Mesh(new THREE.SphereGeometry(1.4, 16, 16), new THREE.MeshBasicMaterial({ color, depthTest: false }));
+    marker.position.copy(point);
+    marker.renderOrder = 999;
+    scene.add(marker);
+    ref.current = marker;
   };
 
   const computeCenterOffset = (mesh: THREE.Mesh, worldPoint: THREE.Vector3): [number, number, number] => {
@@ -432,6 +469,31 @@ export default function Viewport3D() {
     return result;
   };
 
+  /**
+   * Splits a part into two independent parts along an axis-aligned plane —
+   * shared by the Plane Cut tool and the Shapes toolbox's "split on create"
+   * option. Assumes history has already been pushed by the caller.
+   */
+  const splitPart = (partId: string, axis: PlaneAxis, height: number): string | null => {
+    const target = getMergedPartMesh(partId);
+    if (!target) return null;
+    const label = getPartLabel(partId) ?? 'Part';
+    const { upper, lower } = planeCutMesh(target, axis, height, materialRef.current);
+    upper.name = 'ModelPiece';
+    lower.name = 'ModelPiece';
+
+    removePartMeshes(partId);
+    partMetaRef.current.delete(partId);
+
+    const upperId = generatePartId();
+    const lowerId = generatePartId();
+    partMetaRef.current.set(upperId, freshPartMeta(upper.geometry.clone()));
+    partMetaRef.current.set(lowerId, freshPartMeta(lower.geometry.clone()));
+    addPartMesh(upperId, `${label} (upper)`, upper);
+    addPartMesh(lowerId, `${label} (lower)`, lower);
+    return upperId;
+  };
+
   // ---- undo/redo history ---------------------------------------------
   const captureSnapshot = (): HistorySnapshot => ({
     meshes: getAllPartMeshes().map((m) => {
@@ -443,6 +505,7 @@ export default function Viewport3D() {
         baseGeometry: (meta?.baseGeometry ?? m.geometry).clone(),
         features: meta ? meta.features.map(cloneFeature) : [],
         localOrigin: meta ? toTuple3(meta.localOrigin) : [0, 0, 0],
+        lockToPlate: meta?.lockToPlate ?? false,
         position: m.position.toArray() as [number, number, number],
         quaternion: m.quaternion.toArray() as [number, number, number, number],
         scale: m.scale.toArray() as [number, number, number],
@@ -469,6 +532,7 @@ export default function Viewport3D() {
         baseGeometry: ms.baseGeometry.clone(),
         features: ms.features.map(cloneFeature),
         localOrigin: new THREE.Vector3(...ms.localOrigin),
+        lockToPlate: ms.lockToPlate,
       };
       partMetaRef.current.set(ms.partId, meta);
       const compiled = rebuildCompositeGeometry(meta.baseGeometry, meta.features, getThreadRenderOptions, materialRef.current);
@@ -546,6 +610,39 @@ export default function Viewport3D() {
     controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.PAN };
     controlsRef.current = controls;
 
+    // Viewport drag handle for the selected part (Move tool only — see the
+    // reactive attach/detach effect below). Translate-only: rotate/scale
+    // stay in the Transform panel's numeric fields.
+    const transformControls = new TransformControls(camera, renderer.domElement);
+    transformControls.setMode('translate');
+    transformControls.enabled = false;
+    const transformControlsHelper = transformControls.getHelper();
+    transformControlsHelper.visible = false;
+    scene.add(transformControlsHelper);
+    transformControlsRef.current = transformControls;
+
+    transformControls.addEventListener('dragging-changed', (event) => {
+      controls.enabled = !event.value;
+      if (event.value) {
+        pushHistory();
+      } else {
+        updateDimensions();
+        updateSelectedPartPosition();
+      }
+    });
+    transformControls.addEventListener('objectChange', () => {
+      const obj = transformControls.object;
+      if (!obj) return;
+      const partId = obj.userData.partId as string | undefined;
+      const part = partId ? useAppStore.getState().parts.find((p) => p.id === partId) : undefined;
+      if (part?.lockToPlate) {
+        const box = new THREE.Box3().setFromObject(obj);
+        obj.position.z -= box.min.z;
+      }
+      updateDimensions();
+      updateSelectedPartPosition();
+    });
+
     const hemi = new THREE.HemisphereLight(0xffffff, 0x1a1c22, 1.1);
     scene.add(hemi);
     const dir = new THREE.DirectionalLight(0xffffff, 1.4);
@@ -564,6 +661,73 @@ export default function Viewport3D() {
 
     scene.add(modelGroupRef.current);
 
+    // ---- orientation trihedron (bottom-left corner) --------------------
+    const makeAxisLabelSprite = (text: string, colorHex: string): THREE.Sprite => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 64;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = colorHex;
+      ctx.beginPath();
+      ctx.arc(32, 32, 27, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#0b0d12';
+      ctx.font = 'bold 38px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, 32, 35);
+      const texture = new THREE.CanvasTexture(canvas);
+      const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, depthWrite: false, sizeAttenuation: false });
+      const sprite = new THREE.Sprite(material);
+      sprite.scale.set(0.42, 0.42, 1);
+      return sprite;
+    };
+
+    const makeGizmoAxis = (dir: THREE.Vector3, colorNum: number, colorHex: string, label: string): THREE.Group => {
+      const group = new THREE.Group();
+      const lineGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), dir.clone().multiplyScalar(0.55)]);
+      const line = new THREE.Line(lineGeom, new THREE.LineBasicMaterial({ color: colorNum }));
+      group.add(line);
+
+      const coneGeom = new THREE.ConeGeometry(0.075, 0.2, 12);
+      const cone = new THREE.Mesh(coneGeom, new THREE.MeshBasicMaterial({ color: colorNum }));
+      cone.position.copy(dir.clone().multiplyScalar(0.62));
+      cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      group.add(cone);
+
+      const sprite = makeAxisLabelSprite(label, colorHex);
+      sprite.position.copy(dir.clone().multiplyScalar(0.92));
+      group.add(sprite);
+      return group;
+    };
+
+    const gizmoScene = new THREE.Scene();
+    gizmoScene.background = new THREE.Color(0x1a1d26);
+    gizmoScene.add(makeGizmoAxis(new THREE.Vector3(1, 0, 0), 0xef4444, '#ef4444', 'X'));
+    gizmoScene.add(makeGizmoAxis(new THREE.Vector3(0, 1, 0), 0x22c55e, '#22c55e', 'Y'));
+    gizmoScene.add(makeGizmoAxis(new THREE.Vector3(0, 0, 1), 0x3b82f6, '#3b82f6', 'Z'));
+    gizmoSceneRef.current = gizmoScene;
+
+    const gizmoCamera = new THREE.OrthographicCamera(-1.05, 1.05, 1.05, -1.05, 0.1, 10);
+    gizmoCameraRef.current = gizmoCamera;
+
+    const GIZMO_SIZE = 108;
+    const GIZMO_MARGIN = 14;
+    const gizmoForward = new THREE.Vector3();
+    const renderGizmo = () => {
+      gizmoForward.set(0, 0, -1).applyQuaternion(camera.quaternion);
+      gizmoCamera.position.copy(gizmoForward).multiplyScalar(-3);
+      gizmoCamera.quaternion.copy(camera.quaternion);
+      gizmoCamera.up.copy(camera.up);
+
+      renderer.setScissorTest(true);
+      renderer.setViewport(GIZMO_MARGIN, GIZMO_MARGIN, GIZMO_SIZE, GIZMO_SIZE);
+      renderer.setScissor(GIZMO_MARGIN, GIZMO_MARGIN, GIZMO_SIZE, GIZMO_SIZE);
+      renderer.clearDepth();
+      renderer.render(gizmoScene, gizmoCamera);
+      renderer.setScissorTest(false);
+    };
+
     const resize = () => {
       const w = container.clientWidth;
       const h = container.clientHeight;
@@ -580,7 +744,9 @@ export default function Viewport3D() {
     const animate = () => {
       frameId = requestAnimationFrame(animate);
       controls.update();
+      renderer.setViewport(0, 0, container.clientWidth, container.clientHeight);
       renderer.render(scene, camera);
+      renderGizmo();
     };
     animate();
 
@@ -691,6 +857,37 @@ export default function Viewport3D() {
         }
         return;
       }
+
+      if (tool === 'mate') {
+        const hit = getIntersection(event);
+        if (!hit || !hit.face) return;
+        const partId = hit.object.userData.partId as string | undefined;
+        if (!partId) return;
+        const mesh = hit.object as THREE.Mesh;
+        const worldNormal = hit.face.normal.clone().transformDirection(mesh.matrixWorld).normalize();
+        const state = useAppStore.getState().mate;
+
+        if (state.stage === 'pickA') {
+          const anchor: MateAnchor = { partId, point: toTuple3(toLocalPoint(mesh, hit.point)), normal: toTuple3(toLocalNormal(mesh, worldNormal)) };
+          useAppStore.getState().setMate({ a: anchor, stage: 'pickB' });
+          showMateMarker('a', hit.point);
+        } else if (state.stage === 'pickB') {
+          if (partId === state.a?.partId) return; // must mate to a different part
+          const anchor: MateAnchor = { partId, point: toTuple3(toLocalPoint(mesh, hit.point)), normal: toTuple3(toLocalNormal(mesh, worldNormal)) };
+          useAppStore.getState().setMate({ b: anchor, stage: 'ready' });
+          showMateMarker('b', hit.point);
+        } else if (state.stage === 'pickEdgeA') {
+          if (partId !== state.a?.partId) return;
+          useAppStore.getState().setMate({ edgeA: toTuple3(toLocalPoint(mesh, hit.point)), stage: 'pickEdgeB' });
+          showMateMarker('a', hit.point);
+        } else if (state.stage === 'pickEdgeB') {
+          if (partId !== state.b?.partId) return;
+          useAppStore.getState().setMate({ edgeB: toTuple3(toLocalPoint(mesh, hit.point)), stage: 'edgeReady' });
+          showMateMarker('b', hit.point);
+        }
+        return;
+      }
+
       if (tool !== 'hole' && tool !== 'primitive') return;
       const hit = getIntersection(event);
       if (!hit || !hit.face) return;
@@ -758,7 +955,7 @@ export default function Viewport3D() {
 
         const partId = generatePartId();
         geometry = validateAndAutoRepair(geometry, partId, name);
-        partMetaRef.current.set(partId, { baseGeometry: geometry.clone(), features: [], localOrigin: new THREE.Vector3(0, 0, 0) });
+        partMetaRef.current.set(partId, freshPartMeta(geometry.clone()));
 
         const mesh = new THREE.Mesh(geometry, materialRef.current);
         mesh.name = 'ModelPiece';
@@ -799,7 +996,7 @@ export default function Viewport3D() {
 
         const partId = generatePartId();
         geometry = validateAndAutoRepair(geometry, partId, name);
-        partMetaRef.current.set(partId, { baseGeometry: geometry.clone(), features: [], localOrigin: new THREE.Vector3(0, 0, 0) });
+        partMetaRef.current.set(partId, freshPartMeta(geometry.clone()));
 
         const newSize = new THREE.Vector3();
         geometry.boundingBox!.getSize(newSize);
@@ -1073,27 +1270,13 @@ export default function Viewport3D() {
         const { axis, height } = useAppStore.getState().planeCut;
         const activePartId = getActivePartId();
         if (!activePartId) return;
-        const target = getMergedPartMesh(activePartId);
-        if (!target) return;
 
         pushHistory();
-        const label = getPartLabel(activePartId) ?? 'Model';
-        const { upper, lower } = planeCutMesh(target, axis, height, materialRef.current);
-        upper.name = 'ModelPiece';
-        lower.name = 'ModelPiece';
-
         // Split into two independently selectable/movable parts, rather
         // than one part with two co-located meshes — otherwise there's no
         // way to actually separate the pieces afterward (see Move tool).
-        removePartMeshes(activePartId);
-        partMetaRef.current.delete(activePartId);
-
-        const upperId = generatePartId();
-        const lowerId = generatePartId();
-        partMetaRef.current.set(upperId, { baseGeometry: upper.geometry.clone(), features: [], localOrigin: new THREE.Vector3(0, 0, 0) });
-        partMetaRef.current.set(lowerId, { baseGeometry: lower.geometry.clone(), features: [], localOrigin: new THREE.Vector3(0, 0, 0) });
-        addPartMesh(upperId, `${label} (upper)`, upper);
-        addPartMesh(lowerId, `${label} (lower)`, lower);
+        const upperId = splitPart(activePartId, axis, height);
+        if (!upperId) return;
 
         updateParts();
         useAppStore.getState().setSelectedPartId(upperId);
@@ -1319,6 +1502,159 @@ export default function Viewport3D() {
         meta.localOrigin.set(x, y, z);
         updateParts();
       },
+
+      setLockToPlate: (partId, locked) => {
+        const meta = getPartMeta(partId);
+        const mesh = getPartMeshes(partId)[0];
+        if (!meta) return;
+        meta.lockToPlate = locked;
+        if (locked && mesh) {
+          const box = new THREE.Box3().setFromObject(mesh);
+          mesh.position.z -= box.min.z;
+          updateDimensions();
+        }
+        updateParts();
+      },
+
+      addBasicShape: () => {
+        const s = useAppStore.getState().shapeTool;
+        const geometry = createBasicShapeGeometry(s.shape, s);
+        geometry.center();
+        geometry.computeBoundingBox();
+
+        const isFirst = modelGroupRef.current.children.length === 0;
+        if (isFirst) resetHistory();
+        else pushHistory();
+
+        const partId = generatePartId();
+        partMetaRef.current.set(partId, freshPartMeta(geometry.clone()));
+
+        const mesh = new THREE.Mesh(geometry, materialRef.current);
+        mesh.name = 'ModelPiece';
+
+        if (isFirst) {
+          const box = new THREE.Box3().setFromObject(mesh);
+          mesh.position.set(0, 0, -box.min.z);
+        } else {
+          const newSize = new THREE.Vector3();
+          geometry.boundingBox!.getSize(newSize);
+          const existingBox = new THREE.Box3().setFromObject(modelGroupRef.current);
+          const offsetX = existingBox.max.x + 10 + newSize.x / 2;
+          mesh.position.set(offsetX, 0, newSize.z / 2);
+        }
+        const shapeName = BASIC_SHAPE_LABELS[s.shape];
+        const priorCount = getAllPartMeshes().filter((m) => (m.userData.partLabel as string)?.startsWith(shapeName + ' ')).length;
+        addPartMesh(partId, `${shapeName} ${priorCount + 1}`, mesh);
+
+        let finalPartId = partId;
+        if (s.splitOnCreate) {
+          const meshBox = new THREE.Box3().setFromObject(mesh);
+          const center = new THREE.Vector3();
+          meshBox.getCenter(center);
+          const upperId = splitPart(partId, s.splitAxis, center[s.splitAxis]);
+          if (upperId) finalPartId = upperId;
+        }
+
+        if (!useAppStore.getState().fileName) {
+          useAppStore.getState().setFileName('Shapes');
+          fileNameRef.current = 'shapes.stl';
+        }
+        useAppStore.getState().setHasModel(true);
+        useAppStore.getState().setSelectedPartId(finalPartId);
+        updateParts();
+        useAppStore.getState().setActiveTool('select');
+      },
+
+      cancelMate: () => {
+        clearMateMarkers();
+        useAppStore.getState().setMate({ stage: 'pickA', a: null, b: null, fitted: false, edgeA: null, edgeB: null });
+      },
+
+      applyMateFit: () => {
+        const { a, b } = useAppStore.getState().mate;
+        if (!a || !b) return;
+        const meshA = getPartMeshes(a.partId)[0];
+        const meshB = getPartMeshes(b.partId)[0];
+        if (!meshA || !meshB) return;
+
+        pushHistory();
+
+        // Rotate B so its picked face points opposite A's, then slide B
+        // along A's normal only, until the two face planes touch — this
+        // preserves wherever B ended up in the other two (in-plane)
+        // directions, which Flush Edge (below) can then align precisely.
+        const worldNormalA = toWorldNormal(meshA, new THREE.Vector3(...a.normal));
+        const worldNormalB = toWorldNormal(meshB, new THREE.Vector3(...b.normal));
+        const targetNormalB = worldNormalA.clone().negate();
+        const rotQuat = new THREE.Quaternion().setFromUnitVectors(worldNormalB, targetNormalB);
+        meshB.quaternion.premultiply(rotQuat);
+        meshB.updateMatrixWorld(true);
+
+        const worldPointA = toWorldPoint(meshA, new THREE.Vector3(...a.point));
+        const worldPointBAfterRotate = toWorldPoint(meshB, new THREE.Vector3(...b.point));
+        const signedDistance = worldPointBAfterRotate.clone().sub(worldPointA).dot(worldNormalA);
+        meshB.position.addScaledVector(worldNormalA, -signedDistance);
+        meshB.updateMatrixWorld(true);
+
+        updateDimensions();
+        updateSelectedPartPosition();
+        useAppStore.getState().setMate({ fitted: true });
+      },
+
+      applyFlushEdge: () => {
+        const { a, b, edgeA, edgeB } = useAppStore.getState().mate;
+        if (!a || !b || !edgeA || !edgeB) return;
+        const meshA = getPartMeshes(a.partId)[0];
+        const meshB = getPartMeshes(b.partId)[0];
+        if (!meshA || !meshB) return;
+
+        pushHistory();
+
+        // Slide B within the mated plane only (never along A's normal,
+        // which would break the flush contact Fit already established).
+        const worldNormalA = toWorldNormal(meshA, new THREE.Vector3(...a.normal));
+        const worldEdgeA = toWorldPoint(meshA, new THREE.Vector3(...edgeA));
+        const worldEdgeB = toWorldPoint(meshB, new THREE.Vector3(...edgeB));
+        const delta = worldEdgeA.clone().sub(worldEdgeB);
+        const inPlaneDelta = delta.clone().sub(worldNormalA.clone().multiplyScalar(delta.dot(worldNormalA)));
+        meshB.position.add(inPlaneDelta);
+        meshB.updateMatrixWorld(true);
+
+        updateDimensions();
+        updateSelectedPartPosition();
+        clearMateMarkers();
+        useAppStore.getState().setMate({ stage: 'ready', edgeA: null, edgeB: null });
+      },
+
+      weldMatedParts: () => {
+        const { a, b } = useAppStore.getState().mate;
+        if (!a || !b) return;
+        const meshA = getPartMeshes(a.partId)[0];
+        const meshB = getPartMeshes(b.partId)[0];
+        if (!meshA || !meshB) return;
+
+        pushHistory();
+        const labelA = getPartLabel(a.partId) ?? 'Part';
+        const labelB = getPartLabel(b.partId) ?? 'Part';
+        const merged = performCSG(meshA, meshB, ADDITION, materialRef.current);
+        merged.name = 'ModelPiece';
+
+        removePartMeshes(a.partId);
+        removePartMeshes(b.partId);
+        partMetaRef.current.delete(a.partId);
+        partMetaRef.current.delete(b.partId);
+
+        const newId = generatePartId();
+        partMetaRef.current.set(newId, freshPartMeta(merged.geometry.clone()));
+        addPartMesh(newId, `${labelA} + ${labelB}`, merged);
+
+        clearMateMarkers();
+        useAppStore.getState().setMate({ stage: 'pickA', a: null, b: null, fitted: false, edgeA: null, edgeB: null });
+        updateParts();
+        useAppStore.getState().setSelectedPartId(newId);
+        updateDimensions();
+        useAppStore.getState().setActiveTool('select');
+      },
     };
 
     viewportActionsRef.current = actions;
@@ -1379,6 +1715,8 @@ export default function Viewport3D() {
       window.removeEventListener('keydown', onKeyDown);
       measureUnsub();
       clearMeasureMarkers();
+      clearMateMarkers();
+      transformControls.dispose();
       controls.dispose();
       renderer.dispose();
       container.removeChild(renderer.domElement);
@@ -1400,6 +1738,7 @@ export default function Viewport3D() {
   // ---- reactive: live cutter preview size + centerline cleanup on tool switch --
   useEffect(() => {
     const unsub = useAppStore.subscribe((state) => {
+      if (state.activeTool !== 'mate') clearMateMarkers();
       if (state.activeTool !== 'hole' && state.activeTool !== 'primitive') {
         clearCenterlines();
         return;
@@ -1433,6 +1772,31 @@ export default function Viewport3D() {
         scene.add(fresh);
         previewMeshRef.current = fresh;
       }
+    });
+    return unsub;
+  }, []);
+
+  // ---- reactive: attach/detach the viewport drag gizmo to the selected part --
+  useEffect(() => {
+    const unsub = useAppStore.subscribe((state, prev) => {
+      if (state.selectedPartId === prev.selectedPartId && state.activeTool === prev.activeTool && state.parts === prev.parts) return;
+      const tc = transformControlsRef.current;
+      if (!tc) return;
+
+      if (state.activeTool === 'move' && state.selectedPartId) {
+        const mesh = getPartMeshes(state.selectedPartId)[0];
+        if (mesh) {
+          tc.attach(mesh);
+          tc.getHelper().visible = true;
+          tc.enabled = true;
+          const part = state.parts.find((p) => p.id === state.selectedPartId);
+          tc.showZ = !part?.lockToPlate;
+          return;
+        }
+      }
+      tc.getHelper().visible = false;
+      tc.enabled = false;
+      tc.detach();
     });
     return unsub;
   }, []);

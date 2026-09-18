@@ -1,12 +1,14 @@
 import { create } from 'zustand';
 import { GENERIC_PRINTER_ID } from '@/utils/printerProfiles';
+import type { Units } from '@/utils/units';
 
-export type ToolId = 'select' | 'transform' | 'hole' | 'primitive' | 'planeCut' | 'move' | 'measure';
+export type ToolId = 'select' | 'transform' | 'hole' | 'primitive' | 'planeCut' | 'move' | 'measure' | 'mate' | 'shapes';
 export type PrimitiveShape = 'box' | 'cylinder' | 'washer';
 export type PrimitiveOp = 'union' | 'subtract';
 export type PlaneAxis = 'x' | 'y' | 'z';
 export type OrthoView = 'top' | 'front' | 'side' | 'iso';
 export type FeatureType = 'hole' | 'primitive';
+export type BasicShape = 'box' | 'cylinder' | 'sphere' | 'cone' | 'pyramid' | 'torus';
 
 export interface Dimensions {
   x: number;
@@ -76,12 +78,43 @@ export interface MeasureToolState {
   point: [number, number, number] | null;
 }
 
+/** One click-picked face reference on a part, used by the Mate tool. */
+export interface MateAnchor {
+  partId: string;
+  point: [number, number, number];
+  normal: [number, number, number];
+}
+
+export type MateStage = 'pickA' | 'pickB' | 'ready' | 'pickEdgeA' | 'pickEdgeB' | 'edgeReady';
+
+export interface MateToolState {
+  stage: MateStage;
+  a: MateAnchor | null;
+  b: MateAnchor | null;
+  fitted: boolean;
+  edgeA: [number, number, number] | null;
+  edgeB: [number, number, number] | null;
+}
+
+export interface ShapeToolState {
+  shape: BasicShape;
+  width: number;
+  depth: number;
+  height: number;
+  diameter: number;
+  tubeDiameter: number;
+  splitOnCreate: boolean;
+  splitAxis: PlaneAxis;
+}
+
 /** One independent object in the scene (the loaded model, or an added part) — its own movable/scalable layer. */
 export interface PartInfo {
   id: string;
   label: string;
   /** User-defined reference point, in the part's own stable local frame (default 0,0,0 = its centroid). */
   localOrigin: [number, number, number];
+  /** When true, the part's viewport drag gizmo is constrained to X/Y — it can't be dragged off the build plate in Z. */
+  lockToPlate: boolean;
 }
 
 /**
@@ -166,6 +199,19 @@ export interface ViewportActions {
   cancelPickLocalOrigin: () => void;
   resetLocalOrigin: (partId: string) => void;
   setLocalOrigin: (partId: string, x: number, y: number, z: number) => void;
+  setLockToPlate: (partId: string, locked: boolean) => void;
+
+  /** Adds a new independent part built from the current Shapes-tool selection. */
+  addBasicShape: () => void;
+
+  /** Clears Mate tool markers/state without leaving the tool. */
+  cancelMate: () => void;
+  /** Rotates+moves part B so its picked face sits flush against part A's, facing it. */
+  applyMateFit: () => void;
+  /** Slides part B within the mated plane so the two flush-edge reference points line up. */
+  applyFlushEdge: () => void;
+  /** Real CSG union of the two mated parts into a single merged part. */
+  weldMatedParts: () => void;
 }
 
 interface AppState {
@@ -174,6 +220,7 @@ interface AppState {
   isBusy: boolean;
   busyMessage: string | null;
   dimensions: Dimensions;
+  units: Units;
 
   wireframe: boolean;
   flatShading: boolean;
@@ -193,6 +240,8 @@ interface AppState {
   primitive: PrimitiveToolState;
   planeCut: PlaneCutState;
   measure: MeasureToolState;
+  mate: MateToolState;
+  shapeTool: ShapeToolState;
 
   parts: PartInfo[];
   selectedPartId: string | null;
@@ -218,6 +267,7 @@ interface AppState {
   setHasModel: (has: boolean) => void;
   setBusy: (busy: boolean, message?: string | null) => void;
   setDimensions: (dims: Dimensions) => void;
+  setUnits: (units: Units) => void;
 
   setWireframe: (on: boolean) => void;
   setFlatShading: (on: boolean) => void;
@@ -234,6 +284,8 @@ interface AppState {
   resetPrimitivePlacement: () => void;
   setPlaneCut: (partial: Partial<PlaneCutState>) => void;
   setMeasure: (partial: Partial<MeasureToolState>) => void;
+  setMate: (partial: Partial<MateToolState>) => void;
+  setShapeTool: (partial: Partial<ShapeToolState>) => void;
 
   setParts: (parts: PartInfo[]) => void;
   setSelectedPartId: (id: string | null) => void;
@@ -300,12 +352,33 @@ const defaultMeasure: MeasureToolState = {
   point: null,
 };
 
+const defaultMate: MateToolState = {
+  stage: 'pickA',
+  a: null,
+  b: null,
+  fitted: false,
+  edgeA: null,
+  edgeB: null,
+};
+
+const defaultShapeTool: ShapeToolState = {
+  shape: 'box',
+  width: 20,
+  depth: 20,
+  height: 20,
+  diameter: 20,
+  tubeDiameter: 5,
+  splitOnCreate: false,
+  splitAxis: 'z',
+};
+
 export const useAppStore = create<AppState>((set) => ({
   fileName: null,
   hasModel: false,
   isBusy: false,
   busyMessage: null,
   dimensions: { x: 0, y: 0, z: 0 },
+  units: 'mm',
 
   wireframe: false,
   flatShading: false,
@@ -322,6 +395,8 @@ export const useAppStore = create<AppState>((set) => ({
   primitive: defaultPrimitive,
   planeCut: defaultPlaneCut,
   measure: defaultMeasure,
+  mate: defaultMate,
+  shapeTool: defaultShapeTool,
 
   parts: [],
   selectedPartId: null,
@@ -343,6 +418,7 @@ export const useAppStore = create<AppState>((set) => ({
   setHasModel: (has) => set({ hasModel: has }),
   setBusy: (busy, message = null) => set({ isBusy: busy, busyMessage: message }),
   setDimensions: (dims) => set({ dimensions: dims }),
+  setUnits: (units) => set({ units }),
 
   setWireframe: (on) => set({ wireframe: on }),
   setFlatShading: (on) => set({ flatShading: on }),
@@ -359,6 +435,7 @@ export const useAppStore = create<AppState>((set) => ({
           ? state.primitive
           : { ...defaultPrimitive, shape: state.primitive.shape, operation: state.primitive.operation, threadId: state.primitive.threadId },
       measure: tool === 'measure' ? state.measure : { ...defaultMeasure },
+      mate: tool === 'mate' ? state.mate : { ...defaultMate },
       selectedFeatureId: tool === 'hole' || tool === 'primitive' ? state.selectedFeatureId : null,
     })),
 
@@ -375,6 +452,8 @@ export const useAppStore = create<AppState>((set) => ({
 
   setPlaneCut: (partial) => set((state) => ({ planeCut: { ...state.planeCut, ...partial } })),
   setMeasure: (partial) => set((state) => ({ measure: { ...state.measure, ...partial } })),
+  setMate: (partial) => set((state) => ({ mate: { ...state.mate, ...partial } })),
+  setShapeTool: (partial) => set((state) => ({ shapeTool: { ...state.shapeTool, ...partial } })),
 
   setParts: (parts) => set({ parts }),
   setSelectedPartId: (id) => set({ selectedPartId: id }),
