@@ -408,12 +408,22 @@ the same Primitive workflow, just pre-filled.
   the cutter would no longer fully clear the hole it's snapped to. This is
   advisory, not blocking — StitchMesh warns and lets you proceed, same as
   its other geometry warnings (§17, §20).
+- **Either end, just by clicking nearer it.** For a through-hole, StitchMesh
+  places the cutter at whichever opening your click actually landed closer
+  to — click near the far side and it snaps there, not always the side the
+  hole was originally drilled from.
+- **Use the other end instead** — a button that appears whenever a through-
+  hole was detected, right below the dimension fields. It swaps the current
+  placement to the opposite opening without making you re-click, for when
+  the end you actually want is awkward to reach from the current camera
+  angle.
 - **Both ends, in one click.** If the hole you snapped to goes all the way
-  through the part, an **Also cut the opposite end** checkbox appears
+  through the part, an **Also cut the opposite end** checkbox also appears
   below the fields. StitchMesh confirms this automatically — it probes just
   past the hole's far side to check whether material is actually there —
   so the checkbox only shows up for a genuine through-hole; a blind hole
-  never offers it. Check it and Apply creates two identical cuts, one at
+  never offers it (nor the "other end" button above — a blind hole only has
+  one valid opening). Check it and Apply creates two identical cuts, one at
   each opening, matched to the hole's own axis on both ends. It's off by
   default: leave it unchecked for the single-end behavior described above.
 
@@ -433,6 +443,13 @@ filled in — a 45° bevel by construction. Apply as-is or adjust first.*
 *A through-hole with "Also cut the opposite end" checked — Apply added
 "Cut cylinder 1" at the near opening and "Cut cylinder 2 (far end)" at the
 far one, both from a single click and a single Apply.*
+
+![Use the other end instead, and Also cut the opposite end](manual-assets/10g-end-controls.png)
+
+*A through-hole counterbore, both end-selection controls visible: "Use the
+other end instead" (swaps this placement to the opposite opening) and
+"Also cut the opposite end" (cuts both in one Apply) — both appear only
+when StitchMesh has confirmed a real opening exists on the far side.*
 
 ---
 
@@ -496,22 +513,37 @@ the way a parametric CAD face would.
 
 ### Axis snap: picking a hole or boss instead of a flat face
 
-Click near a **Hole** feature or a round **Modify** primitive (cylinder or
-washer) instead of a flat spot, and the pick snaps to that feature's own
-centerline — its stored surface point and true axis direction — rather
-than whatever raw point you happened to click on its curved wall. The
-picked anchor shows a short dashed line through it in the viewport (its
-axis) and the Mate panel tags it with its diameter, e.g. "6.00mm axis"
-(shown with the diameter symbol in the app itself).
+As soon as the Mate tool is active, StitchMesh draws a dashed **centerline**
+straight through the true axis of every Hole and round **Modify** primitive
+(cylinder or washer) on every visible part — the same line you'd draw by
+hand on a shop drawing to mark a hole's center. It runs the feature's full
+length and a little past either end, so it's visible even where the axis
+extends into open air above a surface, not just inside the material.
+
+Click near a **Hole** feature or a round primitive instead of a flat spot —
+or click the centerline itself, including where it runs through open space
+past the surface — and the pick snaps to that feature's true centerline (its
+stored surface point and true axis direction) rather than whatever raw point
+you happened to click on its curved wall. The picked anchor shows a short
+dashed marker line through it and the Mate panel tags it with its diameter,
+e.g. "6.00mm axis" (shown with the diameter symbol in the app itself).
 This is what makes coaxial fits (below) both possible and precise: a click
-anywhere on a hole's rim reliably means "this hole's axis," not "this
-one triangle on its wall."
+anywhere on a hole's rim — or its drawn centerline — reliably means "this
+hole's axis," not "this one triangle on its wall." The centerlines disappear
+again as soon as you leave the Mate tool.
 
 ![Axis-snapped picks on a hole and a matching boss](manual-assets/12c-mate-axis-snap.png)
 
 *A 6mm hole (purple marker + dashed axis line) and a 6mm boss (orange) —
 both picks snapped to their true centerlines, and the panel recognizes
 the matching diameters.*
+
+![Centerlines drawn through a hole and a boss before either is picked](manual-assets/12g-mate-centerlines.png)
+
+*The Mate tool active, nothing picked yet — a centerline already runs
+through the hole on the left part and the boss on the right, both
+directly clickable, including the stretch above the boss's own top where
+there's no mesh at all underneath the cursor.*
 
 ### Smart Fit — coaxial (pin into a matching hole)
 

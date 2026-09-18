@@ -209,6 +209,8 @@ export interface ViewportActions {
   cancelHolePlacement: () => void;
   applyPrimitive: () => void;
   cancelPrimitivePlacement: () => void;
+  /** Swaps the current Quick Chamfer/Counterbore placement to the opposite opening of the same through-hole (only available when one was detected). */
+  swapPrimitiveEnd: () => void;
   applyPlaneCut: () => void;
   /** Defaults planeCut.height to the model's current bounding-box center on the given axis, so the default cut isn't a no-op on a build-plate-dropped model. */
   centerPlaneCutHeight: (axis: PlaneAxis) => void;

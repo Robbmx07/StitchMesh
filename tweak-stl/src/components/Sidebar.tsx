@@ -28,6 +28,7 @@ import {
   type PrimitiveToolState,
   type ToolId,
   type BasicShape,
+  type ViewportActions,
 } from '@/state/useAppStore';
 import { THREAD_STANDARDS, THREAD_SYSTEM_LABELS, findThreadStandard, type ThreadSystem } from '@/utils/threadStandards';
 import { findPrinterProfile, threadPrintabilityWarning, effectivePrinterProfile } from '@/utils/printerProfiles';
@@ -492,21 +493,37 @@ function ReferenceHoleWarning({ primitive }: { primitive: PrimitiveToolState }) 
 
 /**
  * Offered only when Quick Chamfer/Counterbore's through-hole probe (see
- * Viewport3D) confirmed the snapped hole opens on both faces — lets Apply
- * cut an identical feature at the opposite opening too, instead of making
- * the user repeat the click on the back side. Off by default: a single
- * end is the safer assumption when the user hasn't said otherwise.
+ * Viewport3D) found a real second opening on the far side of the snapped
+ * hole. "Use the other end instead" repositions this same cutter to that
+ * opposite opening — for when the end you actually wanted was awkward to
+ * click directly, or the click simply landed on the near side by default.
+ * "Also cut the opposite end" cuts both in one Apply. Both are off by
+ * default: a single end at the clicked location is the safer assumption
+ * when the user hasn't said otherwise.
  */
-function BothEndsToggle({ primitive, setPrimitive }: { primitive: PrimitiveToolState; setPrimitive: (p: Partial<PrimitiveToolState>) => void }) {
+function EndControls({
+  primitive,
+  setPrimitive,
+  viewportActions,
+}: {
+  primitive: PrimitiveToolState;
+  setPrimitive: (p: Partial<PrimitiveToolState>) => void;
+  viewportActions: ViewportActions | null;
+}) {
   if (!primitive.oppositeEndPoint) return null;
   return (
-    <div className="field-row pt-1">
-      <label className="text-sm text-slate-300">Also cut the opposite end</label>
-      <input
-        type="checkbox"
-        checked={primitive.mirrorToOppositeEnd}
-        onChange={(e) => setPrimitive({ mirrorToOppositeEnd: e.target.checked })}
-      />
+    <div className="space-y-1.5 pt-1">
+      <button className="btn w-full" onClick={() => viewportActions?.swapPrimitiveEnd()}>
+        Use the other end instead
+      </button>
+      <div className="field-row">
+        <label className="text-sm text-slate-300">Also cut the opposite end</label>
+        <input
+          type="checkbox"
+          checked={primitive.mirrorToOppositeEnd}
+          onChange={(e) => setPrimitive({ mirrorToOppositeEnd: e.target.checked })}
+        />
+      </div>
     </div>
   );
 }
@@ -541,8 +558,9 @@ function QuickFeaturePanel({ kind }: { kind: 'chamfer' | 'counterbore' }) {
           </p>
           <p className="text-[11px] text-slate-600">Clicking somewhere that isn't close to a hole does nothing — try again closer to its opening.</p>
           <p className="text-[11px] text-slate-600">
-            If that hole goes all the way through the part, an "Also cut the opposite end" checkbox appears in the Modify panel — check it
-            to {kind} both openings at once.
+            Clicking nearer the far opening of a through-hole snaps there instead of the near one — so either end is just a click away. If
+            you land on the wrong one, a "Use the other end instead" button in the Modify panel switches without re-clicking; an "Also cut
+            the opposite end" checkbox {kind}s both openings in one Apply.
           </p>
         </>
       )}
@@ -619,7 +637,7 @@ function PrimitivePanel() {
                 </p>
               )}
               <ReferenceHoleWarning primitive={primitive} />
-              <BothEndsToggle primitive={primitive} setPrimitive={setPrimitive} />
+              <EndControls primitive={primitive} setPrimitive={setPrimitive} viewportActions={viewportActions} />
             </>
           )}
           {primitive.shape === 'washer' && (
@@ -639,7 +657,7 @@ function PrimitivePanel() {
                 Inner Diameter to match the hole it opens into for a clean blend, no visible step.
               </p>
               <ReferenceHoleWarning primitive={primitive} />
-              <BothEndsToggle primitive={primitive} setPrimitive={setPrimitive} />
+              <EndControls primitive={primitive} setPrimitive={setPrimitive} viewportActions={viewportActions} />
             </>
           )}
 

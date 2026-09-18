@@ -1,6 +1,6 @@
 {
   "name": "stitchmesh",
-  "version": "0.2.0",
+  "version": "0.0.1",
   "description": "StitchMesh — Offline 3D print modification tool. Modify, don't model.",
   "private": true,
   "type": "module",

@@ -211,6 +211,8 @@ export default function Viewport3D() {
   const gizmoCameraRef = useRef<THREE.OrthographicCamera | null>(null);
   const plateGridRef = useRef<THREE.GridHelper | null>(null);
   const buildVolumeBoxRef = useRef<THREE.LineSegments | null>(null);
+  /** Dashed lines drawn through every hole/cylinder-boss's true axis while the Mate tool is active — both a visual "this is the axis StitchMesh will snap to" cue and a direct pick target (see the Mate pointerdown handler). */
+  const mateCenterlinesRef = useRef<THREE.Line[]>([]);
 
   // ---- part bookkeeping (each mesh carries userData.partId/partLabel) --
   const getAllPartMeshes = (): THREE.Mesh[] =>
@@ -407,6 +409,69 @@ export default function Viewport3D() {
       if (ref.current && scene) scene.remove(ref.current);
       ref.current = null;
     });
+  };
+
+  const clearMateCenterlines = () => {
+    const scene = sceneRef.current;
+    mateCenterlinesRef.current.forEach((line) => {
+      line.geometry.dispose();
+      (line.material as THREE.Material).dispose();
+      if (scene) scene.remove(line);
+    });
+    mateCenterlinesRef.current = [];
+  };
+
+  /**
+   * Draws a dashed line through the true axis of every hole/cylinder-boss on
+   * every visible part — run the wire the full extent of the feature (plus a
+   * small margin past either end) so it reads as "this is the centerline,"
+   * a standard drafting convention, drawn on top (depthTest false) since it's
+   * a construction aid, not part of the model. Each line carries enough in
+   * `userData` (partId/mesh/local axis point+direction/diameter) that the
+   * Mate pointerdown handler can resolve a direct hit on the line itself
+   * into the exact same axis pick `findCylindricalFeatureNear`'s wall-
+   * proximity check would have produced — clicking the line is just an
+   * easier-to-hit alternative to clicking the (often thin) wall.
+   */
+  const rebuildMateCenterlines = () => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    clearMateCenterlines();
+    for (const mesh of getAllPartMeshes()) {
+      if (!mesh.visible) continue;
+      const partId = mesh.userData.partId as string | undefined;
+      if (!partId) continue;
+      const meta = getPartMeta(partId);
+      if (!meta) continue;
+      for (const f of meta.features) {
+        if (f.visible === false || !isCylindricalFeature(f)) continue;
+        const axisPoint = new THREE.Vector3(...f.point);
+        const axisDir = new THREE.Vector3(...f.normal).normalize();
+        const length = f.type === 'hole' ? f.depth : f.height;
+        const axisSign = f.type === 'hole' ? -1 : 1;
+        const margin = 2;
+        const nearLocal = axisPoint.clone().addScaledVector(axisDir, axisSign < 0 ? margin : -margin);
+        const farLocal = axisPoint.clone().addScaledVector(axisDir, axisSign < 0 ? -length - margin : length + margin);
+        const worldA = toWorldPoint(mesh, nearLocal);
+        const worldB = toWorldPoint(mesh, farLocal);
+
+        const geometry = new THREE.BufferGeometry().setFromPoints([worldA, worldB]);
+        const material = new THREE.LineDashedMaterial({
+          color: 0x38bdf8, dashSize: 2, gapSize: 1.2, transparent: true, opacity: 0.55, depthTest: false,
+        });
+        const line = new THREE.Line(geometry, material);
+        line.computeLineDistances();
+        line.renderOrder = 950;
+        line.userData = {
+          partId, mesh,
+          localPoint: [axisPoint.x, axisPoint.y, axisPoint.z] as [number, number, number],
+          localNormal: [axisDir.x, axisDir.y, axisDir.z] as [number, number, number],
+          diameterMM: f.diameter,
+        };
+        scene.add(line);
+        mateCenterlinesRef.current.push(line);
+      }
+    }
   };
 
   /** `axisDirection` given (a snapped hole/boss pick) also draws a short centerline through the marker — the "you picked this feature's axis, not just a surface point" cue. */
@@ -997,6 +1062,10 @@ export default function Viewport3D() {
     };
     animate();
 
+    // A generous hit radius (world mm) for picking a thin dashed centerline
+    // — see rebuildMateCenterlines / the Mate tool's pointerdown handler.
+    raycasterRef.current.params.Line = { threshold: 2 };
+
     // ---- pointer interaction for hole / primitive / measure / origin-pick --
     const getIntersection = (event: PointerEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
@@ -1136,6 +1205,12 @@ export default function Viewport3D() {
     };
 
     const onPointerDown = (event: PointerEvent) => {
+      // Only the left button places/picks anything here — middle-drag orbits
+      // (OrbitControls, plus onMiddleClickRetarget above) and right-drag pans;
+      // without this, the mousedown that starts an orbit or pan would also
+      // fire whatever tool is active (e.g. placing a hole) at the cursor's
+      // pre-drag position.
+      if (event.button !== 0) return;
       const { pickingOrigin, pickingOriginPartId } = useAppStore.getState();
       if (pickingOrigin && pickingOriginPartId) {
         const hit = getIntersection(event);
@@ -1165,49 +1240,93 @@ export default function Viewport3D() {
       }
 
       if (tool === 'mate') {
-        const hit = getIntersection(event);
-        if (!hit || !hit.face) return;
-        const partId = hit.object.userData.partId as string | undefined;
-        if (!partId) return;
-        const mesh = hit.object as THREE.Mesh;
-        const worldNormal = hit.face.normal.clone().transformDirection(mesh.matrixWorld).normalize();
         const state = useAppStore.getState().mate;
-        const localPoint = toLocalPoint(mesh, hit.point);
-        const meta = getPartMeta(partId);
-        const cylSnap = meta ? findCylindricalFeatureNear(meta.features, localPoint) : null;
+        const isAxisStage = state.stage !== 'pickEdgeA' && state.stage !== 'pickEdgeB';
+
+        // A direct hit on a drawn centerline (rebuildMateCenterlines) is a
+        // deliberate axis pick — it wins over the usual wall-proximity snap,
+        // and works even where the line extends past the surface into open
+        // space, not just where the cursor lands on the (often thin) wall.
+        // Edge picks (pickEdgeA/B) always want a literal surface point, so
+        // they skip this entirely.
+        let lineHit: THREE.Intersection | null = null;
+        if (isAxisStage && mateCenterlinesRef.current.length) {
+          const rect = renderer.domElement.getBoundingClientRect();
+          const ndc = new THREE.Vector2(
+            ((event.clientX - rect.left) / rect.width) * 2 - 1,
+            -((event.clientY - rect.top) / rect.height) * 2 + 1,
+          );
+          raycasterRef.current.setFromCamera(ndc, camera);
+          lineHit = raycasterRef.current.intersectObjects(mateCenterlinesRef.current, false)[0] ?? null;
+        }
+
+        let partId: string | undefined;
+        let mesh: THREE.Mesh | undefined;
+        let localPoint: THREE.Vector3;
+        let worldNormal: THREE.Vector3;
+        let worldPointForMarker: THREE.Vector3;
+        let cylSnap: { point: THREE.Vector3; normal: THREE.Vector3; diameterMM: number } | null = null;
+
+        if (lineHit) {
+          const ud = lineHit.object.userData as {
+            partId: string; mesh: THREE.Mesh;
+            localPoint: [number, number, number]; localNormal: [number, number, number]; diameterMM: number;
+          };
+          partId = ud.partId;
+          mesh = ud.mesh;
+          localPoint = new THREE.Vector3(...ud.localPoint);
+          cylSnap = { point: localPoint.clone(), normal: new THREE.Vector3(...ud.localNormal), diameterMM: ud.diameterMM };
+          worldNormal = toWorldNormal(mesh, cylSnap.normal);
+          worldPointForMarker = toWorldPoint(mesh, localPoint);
+        } else {
+          const hit = getIntersection(event);
+          if (!hit || !hit.face) return;
+          partId = hit.object.userData.partId as string | undefined;
+          if (!partId) return;
+          mesh = hit.object as THREE.Mesh;
+          worldNormal = hit.face.normal.clone().transformDirection(mesh.matrixWorld).normalize();
+          localPoint = toLocalPoint(mesh, hit.point);
+          worldPointForMarker = hit.point;
+          if (isAxisStage) {
+            const meta = getPartMeta(partId);
+            cylSnap = meta ? findCylindricalFeatureNear(meta.features, localPoint) : null;
+          }
+        }
+        if (!partId || !mesh) return;
 
         const makeAnchor = (): MateAnchor =>
           cylSnap
-            ? { partId, point: toTuple3(cylSnap.point), normal: toTuple3(cylSnap.normal), isAxis: true, diameterMM: cylSnap.diameterMM }
-            : { partId, point: toTuple3(localPoint), normal: toTuple3(toLocalNormal(mesh, worldNormal)) };
+            ? { partId: partId!, point: toTuple3(cylSnap.point), normal: toTuple3(cylSnap.normal), isAxis: true, diameterMM: cylSnap.diameterMM }
+            : { partId: partId!, point: toTuple3(localPoint), normal: toTuple3(toLocalNormal(mesh!, worldNormal)) };
 
         const markerAxis = cylSnap ? toWorldNormal(mesh, cylSnap.normal) : undefined;
+        const markerPoint = cylSnap ? toWorldPoint(mesh, cylSnap.point) : worldPointForMarker;
 
         if (state.stage === 'pickA') {
           useAppStore.getState().setMate({ a: makeAnchor(), stage: 'pickB' });
-          showMateMarker('a', cylSnap ? toWorldPoint(mesh, cylSnap.point) : hit.point, markerAxis);
+          showMateMarker('a', markerPoint, markerAxis);
         } else if (state.stage === 'pickB') {
           if (partId === state.a?.partId) return; // must mate to a different part
           useAppStore.getState().setMate({ b: makeAnchor(), stage: 'ready' });
-          showMateMarker('b', cylSnap ? toWorldPoint(mesh, cylSnap.point) : hit.point, markerAxis);
+          showMateMarker('b', markerPoint, markerAxis);
         } else if (state.stage === 'pickEdgeA') {
           if (partId !== state.a?.partId) return;
           useAppStore.getState().setMate({ edgeA: toTuple3(localPoint), stage: 'pickEdgeB' });
-          showMateMarker('a', hit.point);
+          showMateMarker('a', worldPointForMarker);
         } else if (state.stage === 'pickEdgeB') {
           if (partId !== state.b?.partId) return;
           useAppStore.getState().setMate({ edgeB: toTuple3(localPoint), stage: 'edgeReady' });
-          showMateMarker('b', hit.point);
+          showMateMarker('b', worldPointForMarker);
         } else if (state.stage === 'pickPairA') {
           if (partId !== state.a?.partId) return;
           const pairPoint = cylSnap ? cylSnap.point : localPoint;
           useAppStore.getState().setMate({ extraPairsA: [...state.extraPairsA, toTuple3(pairPoint)], stage: 'pickPairB' });
-          showMateMarker('a', cylSnap ? toWorldPoint(mesh, cylSnap.point) : hit.point, markerAxis);
+          showMateMarker('a', markerPoint, markerAxis);
         } else if (state.stage === 'pickPairB') {
           if (partId !== state.b?.partId) return;
           const pairPoint = cylSnap ? cylSnap.point : localPoint;
           useAppStore.getState().setMate({ extraPairsB: [...state.extraPairsB, toTuple3(pairPoint)], stage: 'ready' });
-          showMateMarker('b', cylSnap ? toWorldPoint(mesh, cylSnap.point) : hit.point, markerAxis);
+          showMateMarker('b', markerPoint, markerAxis);
         }
         return;
       }
@@ -1219,21 +1338,20 @@ export default function Viewport3D() {
         if (!partId) return;
         const mesh = cylHit.object as THREE.Mesh;
         const meta = getPartMeta(partId);
-        const snap = meta ? findCylindricalFeatureNear(meta.features, toLocalPoint(mesh, cylHit.point), true) : null;
+        const clickLocalPoint = toLocalPoint(mesh, cylHit.point);
+        const snap = meta ? findCylindricalFeatureNear(meta.features, clickLocalPoint, true) : null;
         if (!snap) return; // no hole found close enough to the click — do nothing (see the panel's instructions)
 
-        const worldPoint = toWorldPoint(mesh, snap.point);
-        const worldNormal = toWorldNormal(mesh, snap.normal);
-
-        // If this hole goes all the way through the part, its far end has
-        // its own opening on the opposite face — offer to cut both at once
-        // instead of making the user repeat the click on the back side.
-        // Detected by probing just past the hole's computed far end: a
-        // blind hole still has solid material there (the probe ray, fired
-        // from outside back toward the part, immediately hits that solid
-        // floor); a through-hole is open on the exact centerline all the
-        // way to the near opening, so the probe finds nothing nearby.
+        // The hole's two ends: near (its own stored entry point) and a
+        // computed far end. Probe just past the far end to tell whether
+        // material is actually there — a blind hole's cavity floor is
+        // solid right at that point (the probe ray, fired from outside
+        // back toward the part, hits it almost immediately); a through-
+        // hole is hollow on the exact centerline all the way to the near
+        // opening, so the probe finds nothing nearby.
         const axisDir = snap.normal.clone().normalize();
+        const nearLocalPoint = snap.point;
+        const nearLocalNormal = snap.normal;
         const farLocalPoint = snap.point.clone().addScaledVector(axisDir, -snap.lengthMM);
         const farLocalNormal = axisDir.clone().negate();
         const worldFarPoint = toWorldPoint(mesh, farLocalPoint);
@@ -1244,17 +1362,27 @@ export default function Viewport3D() {
         const probeHits = raycasterRef.current.intersectObject(mesh, false);
         const isThroughHole = probeHits.length === 0 || probeHits[0].distance > probeDistanceMM + 1;
 
+        // Which end did the click actually land nearer to? Only meaningful
+        // for a through-hole — a blind hole has exactly one valid opening
+        // no matter where along its wall you click.
+        const clickedFarEnd = isThroughHole && clickLocalPoint.distanceTo(farLocalPoint) < clickLocalPoint.distanceTo(nearLocalPoint);
+
+        const worldNear = { point: toWorldPoint(mesh, nearLocalPoint), normal: toWorldNormal(mesh, nearLocalNormal) };
+        const worldFar = { point: worldFarPoint, normal: worldFarNormal };
+        const primary = clickedFarEnd ? worldFar : worldNear;
+        const opposite = clickedFarEnd ? worldNear : worldFar;
+
         const common = {
           operation: 'subtract' as const,
           threadId: null,
-          point: toTuple3(worldPoint),
-          normal: toTuple3(worldNormal),
+          point: toTuple3(primary.point),
+          normal: toTuple3(primary.normal),
           targetPartId: partId,
           placed: true,
           editingFeatureId: null,
           referenceHoleDiameterMM: snap.diameterMM,
-          oppositeEndPoint: isThroughHole ? toTuple3(worldFarPoint) : null,
-          oppositeEndNormal: isThroughHole ? toTuple3(worldFarNormal) : null,
+          oppositeEndPoint: isThroughHole ? toTuple3(opposite.point) : null,
+          oppositeEndNormal: isThroughHole ? toTuple3(opposite.normal) : null,
           mirrorToOppositeEnd: false,
         };
 
@@ -1276,7 +1404,7 @@ export default function Viewport3D() {
           useAppStore.getState().setPrimitive({ ...common, shape: 'chamfer', diameter: outerDiameter, innerDiameter, height });
         }
 
-        updatePlacementReadouts('primitive', mesh, worldPoint, partId);
+        updatePlacementReadouts('primitive', mesh, primary.point, partId);
         useAppStore.getState().setActiveTool('primitive');
         return;
       }
@@ -1706,6 +1834,22 @@ export default function Viewport3D() {
         clearPreview();
         useAppStore.getState().resetPrimitivePlacement();
         useAppStore.getState().setSelectedFeatureId(null);
+      },
+
+      swapPrimitiveEnd: () => {
+        const p = useAppStore.getState().primitive;
+        if (!p.point || !p.normal || !p.oppositeEndPoint || !p.oppositeEndNormal) return;
+        useAppStore.getState().setPrimitive({
+          point: p.oppositeEndPoint,
+          normal: p.oppositeEndNormal,
+          oppositeEndPoint: p.point,
+          oppositeEndNormal: p.normal,
+        });
+        const partId = p.targetPartId ?? getActivePartId();
+        const mesh = partId ? getPartMeshes(partId)[0] : null;
+        if (mesh && partId) {
+          updatePlacementReadouts('primitive', mesh, new THREE.Vector3(...p.oppositeEndPoint), partId);
+        }
       },
 
       applyPlaneCut: () => {
@@ -2413,6 +2557,7 @@ export default function Viewport3D() {
       measureUnsub();
       clearMeasureMarkers();
       clearMateMarkers();
+      clearMateCenterlines();
       transformControls.dispose();
       controls.dispose();
       renderer.dispose();
@@ -2480,6 +2625,19 @@ export default function Viewport3D() {
         scene.add(fresh);
         previewMeshRef.current = fresh;
       }
+    });
+    return unsub;
+  }, []);
+
+  // ---- reactive: draw/refresh cylinder-axis centerlines while Mate is active --
+  useEffect(() => {
+    const unsub = useAppStore.subscribe((state, prev) => {
+      if (state.activeTool !== 'mate') {
+        if (prev.activeTool === 'mate') clearMateCenterlines();
+        return;
+      }
+      if (state.activeTool === prev.activeTool && state.parts === prev.parts) return;
+      rebuildMateCenterlines();
     });
     return unsub;
   }, []);
