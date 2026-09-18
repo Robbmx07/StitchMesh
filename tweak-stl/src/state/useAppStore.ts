@@ -2,8 +2,8 @@ import { create } from 'zustand';
 import { GENERIC_PRINTER_ID } from '@/utils/printerProfiles';
 import type { Units } from '@/utils/units';
 
-export type ToolId = 'select' | 'transform' | 'hole' | 'primitive' | 'planeCut' | 'measure' | 'mate' | 'shapes';
-export type PrimitiveShape = 'box' | 'cylinder' | 'washer';
+export type ToolId = 'select' | 'transform' | 'hole' | 'primitive' | 'planeCut' | 'measure' | 'mate' | 'shapes' | 'chamfer' | 'counterbore';
+export type PrimitiveShape = 'box' | 'cylinder' | 'washer' | 'chamfer';
 export type PrimitiveOp = 'union' | 'subtract';
 export type PlaneAxis = 'x' | 'y' | 'z';
 export type OrthoView = 'top' | 'front' | 'side' | 'iso';
@@ -55,6 +55,8 @@ export interface PrimitiveToolState {
   localOffset: [number, number, number] | null;
   editingFeatureId: string | null;
   locked: boolean;
+  /** Set by Quick Chamfer/Counterbore when this primitive was placed by snapping to an existing hole — the hole's own diameter, shown as a reference and used to warn if the new diameter no longer clears it. Null otherwise (a manually-placed primitive has no such reference). */
+  referenceHoleDiameterMM: number | null;
 }
 
 export interface PlaneCutState {
@@ -384,6 +386,7 @@ const defaultPrimitive: PrimitiveToolState = {
   localOffset: null,
   editingFeatureId: null,
   locked: false,
+  referenceHoleDiameterMM: null,
 };
 
 const defaultPlaneCut: PlaneCutState = {
@@ -511,7 +514,7 @@ export const useAppStore = create<AppState>((set) => ({
   setPrimitive: (partial) => set((state) => ({ primitive: { ...state.primitive, ...partial } })),
   resetPrimitivePlacement: () =>
     set((state) => ({
-      primitive: { ...state.primitive, placed: false, point: null, normal: null, editingFeatureId: null },
+      primitive: { ...state.primitive, placed: false, point: null, normal: null, editingFeatureId: null, referenceHoleDiameterMM: null },
     })),
 
   setPlaneCut: (partial) => set((state) => ({ planeCut: { ...state.planeCut, ...partial } })),

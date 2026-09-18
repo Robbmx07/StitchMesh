@@ -352,11 +352,15 @@ editable, lockable, deletable layer under the target part (§6).
 
 ![Primitive panel](manual-assets/10a-primitive-panel.png)
 
-- **Shape**: Block / Cylinder / Washer.
+- **Shape**: Block / Cylinder / Washer / Chamfer. Chamfer is a cone —
+  wide at the surface, narrowing to an inner diameter at depth — normally
+  reached automatically via Quick Chamfer (§9a) rather than picked here,
+  but it's a regular shape choice if you want to set one up by hand.
 - **Operation**: **Add (Union)** fuses it onto the model as a new
   protrusion; **Cut (Subtract)** carves it out as a cavity.
 - **Dimensions**: Block gets Width/Depth/Height; Cylinder gets
-  Diameter/Height; Washer gets Outer/Inner Diameter/Height.
+  Diameter/Height; Washer gets Outer/Inner Diameter/Height; Chamfer gets
+  Diameter/Inner Diameter/Depth.
 - **Thread** (Cylinder only): same dropdown as Hole. With **Add** it
   becomes an external thread (a boss/stud); with **Cut** an internal
   thread (a tapped hole) — the caption updates to say which.
@@ -365,6 +369,56 @@ editable, lockable, deletable layer under the target part (§6).
 
 *M8 × 1.25, Add (Union), 12mm tall, placed on the top face. It shows up in
 the Parts panel as "Add cylinder 1" under the target part.*
+
+---
+
+## 9a. Quick Chamfer & Counterbore
+
+Tabs: **Chamfer** and **C-Bore**. These don't ask you to line anything up —
+click near the opening of an existing **Hole** feature (§8) and StitchMesh
+finds that hole's true centerline and diameter on its own, then hands off
+to the Primitive panel (§9) with a cutter already placed and sized to match
+it. It's a shortcut into Primitive, not a separate modifier: everything
+after the click — the live preview, the editable fields, Apply/Cancel — is
+the same Primitive workflow, just pre-filled.
+
+![Quick Chamfer/Counterbore setup](manual-assets/10c-quickfeature-setup.png)
+
+- **Click near a hole's opening**, on the face it opens through. StitchMesh
+  looks for a Hole feature within about 1.5mm of the click and snaps to its
+  axis — clicking empty space, or too far from any hole, does nothing (no
+  error, just no handoff — try again closer to the opening).
+- **Counterbore** pre-fills a straight cylindrical recess, centered and
+  aligned on the hole's own axis:
+  - **Diameter**: the hole's diameter × 1.6 — roomy enough for a typical
+    bolt head or nut, adjust to match your actual hardware.
+  - **Depth**: 4mm, or half the hole's own depth for a shallower/blind
+    hole — whichever is smaller, so a counterbore can't accidentally cut
+    all the way through it.
+- **Chamfer** pre-fills a cone that blends into the hole with no visible
+  step:
+  - **Inner Diameter** is set to exactly match the hole's diameter.
+  - **Diameter** (the wide, surface end) is Inner Diameter + 2mm.
+  - **Depth** is set so the taper works out to a clean 45° bevel by
+    construction (radius grows by the same amount as the depth).
+- Every field stays editable afterward, same as any Primitive — change
+  Diameter, Inner Diameter, or Depth and the preview updates live.
+- If you narrow a Counterbore's Diameter or a Chamfer's Inner Diameter
+  below the hole's own diameter, an amber warning appears under the field:
+  the cutter would no longer fully clear the hole it's snapped to. This is
+  advisory, not blocking — StitchMesh warns and lets you proceed, same as
+  its other geometry warnings (§17, §20).
+
+![Counterbore result](manual-assets/10d-quickfeature-counterbore-result.png)
+
+*A 6mm hole with a Counterbore snapped onto it — diameter and depth
+pre-filled, ready for Apply or fine-tuning.*
+
+![Chamfer pre-filled from an 8mm hole](manual-assets/10e-quickfeature-chamfer-prefilled.png)
+
+*Clicking the Chamfer tool near an 8mm hole hands off to Modify with
+Diameter 10mm, Inner Diameter 8mm (exact match), and Depth 1mm already
+filled in — a 45° bevel by construction. Apply as-is or adjust first.*
 
 ---
 
@@ -873,7 +927,7 @@ several rounds of this project's development. All findings below are
 
 ---
 
-## 20. Possible future features
+## 21. Possible future features
 
 Most of what was on this list in earlier revisions of this manual is now
 built. What's still genuinely missing, for a future pass:

@@ -77,14 +77,25 @@ const CYLINDER_SNAP_TOLERANCE_MM = 1.5;
  * (inner bore vs outer rim) the click landed closer to. Returns null when
  * the point isn't close enough to any cylindrical feature.
  */
+interface CylindricalSnapResult {
+  point: THREE.Vector3;
+  normal: THREE.Vector3;
+  diameterMM: number;
+  /** The feature's own axial length (its Hole depth, or a primitive's height). */
+  lengthMM: number;
+}
+
 function findCylindricalFeatureNear(
   features: PartFeature[],
   localPoint: THREE.Vector3,
-): { point: THREE.Vector3; normal: THREE.Vector3; diameterMM: number } | null {
-  let best: { distToWall: number; point: THREE.Vector3; normal: THREE.Vector3; diameterMM: number } | null = null;
+  /** Restrict to Hole features only — used by Quick Chamfer/Counterbore, which only make sense at a hole's opening (not a solid boss/pin). */
+  holesOnly = false,
+): CylindricalSnapResult | null {
+  let best: { distToWall: number; point: THREE.Vector3; normal: THREE.Vector3; diameterMM: number; lengthMM: number } | null = null;
 
   for (const f of features) {
     if (f.visible === false || !isCylindricalFeature(f)) continue;
+    if (holesOnly && f.type !== 'hole') continue;
     const axisPoint = new THREE.Vector3(...f.point);
     const axisDir = new THREE.Vector3(...f.normal).normalize();
     const length = f.type === 'hole' ? f.depth : f.height;
@@ -108,12 +119,12 @@ function findCylindricalFeatureNear(
       const distToWall = Math.abs(radialDist - wallDiameter / 2);
       if (distToWall > CYLINDER_SNAP_TOLERANCE_MM) continue;
       if (!best || distToWall < best.distToWall) {
-        best = { distToWall, point: axisPoint.clone(), normal: axisDir.clone(), diameterMM: wallDiameter };
+        best = { distToWall, point: axisPoint.clone(), normal: axisDir.clone(), diameterMM: wallDiameter, lengthMM: length };
       }
     }
   }
 
-  return best ? { point: best.point, normal: best.normal, diameterMM: best.diameterMM } : null;
+  return best ? { point: best.point, normal: best.normal, diameterMM: best.diameterMM, lengthMM: best.lengthMM } : null;
 }
 
 let partIdCounter = 0;
@@ -1198,6 +1209,52 @@ export default function Viewport3D() {
           useAppStore.getState().setMate({ extraPairsB: [...state.extraPairsB, toTuple3(pairPoint)], stage: 'ready' });
           showMateMarker('b', cylSnap ? toWorldPoint(mesh, cylSnap.point) : hit.point, markerAxis);
         }
+        return;
+      }
+
+      if (tool === 'chamfer' || tool === 'counterbore') {
+        const cylHit = getIntersection(event);
+        if (!cylHit) return;
+        const partId = cylHit.object.userData.partId as string | undefined;
+        if (!partId) return;
+        const mesh = cylHit.object as THREE.Mesh;
+        const meta = getPartMeta(partId);
+        const snap = meta ? findCylindricalFeatureNear(meta.features, toLocalPoint(mesh, cylHit.point), true) : null;
+        if (!snap) return; // no hole found close enough to the click — do nothing (see the panel's instructions)
+
+        const worldPoint = toWorldPoint(mesh, snap.point);
+        const worldNormal = toWorldNormal(mesh, snap.normal);
+        const common = {
+          operation: 'subtract' as const,
+          threadId: null,
+          point: toTuple3(worldPoint),
+          normal: toTuple3(worldNormal),
+          targetPartId: partId,
+          placed: true,
+          editingFeatureId: null,
+          referenceHoleDiameterMM: snap.diameterMM,
+        };
+
+        if (tool === 'counterbore') {
+          // A bit wider than the hole (room for a screw head) and no deeper
+          // than roughly half the hole itself, so a shallow/blind hole
+          // doesn't get counterbored all the way through.
+          const diameter = Math.round(snap.diameterMM * 1.6 * 10) / 10;
+          const depthCap = Math.max(1, snap.lengthMM * 0.5);
+          const height = Math.round(Math.min(4, depthCap) * 10) / 10;
+          useAppStore.getState().setPrimitive({ ...common, shape: 'cylinder', diameter, height });
+        } else {
+          // Inner diameter matches the hole exactly (a clean blend, no
+          // step); depth is set so the diameter difference forms a 45°
+          // bevel by construction (radius delta == depth).
+          const innerDiameter = snap.diameterMM;
+          const outerDiameter = Math.round((innerDiameter + 2) * 10) / 10;
+          const height = Math.round(((outerDiameter - innerDiameter) / 2) * 10) / 10;
+          useAppStore.getState().setPrimitive({ ...common, shape: 'chamfer', diameter: outerDiameter, innerDiameter, height });
+        }
+
+        updatePlacementReadouts('primitive', mesh, worldPoint, partId);
+        useAppStore.getState().setActiveTool('primitive');
         return;
       }
 

@@ -124,7 +124,7 @@ export function createHoleCutterMesh(diameter: number, depth: number, threadOpts
 }
 
 export function createPrimitiveMesh(
-  shape: 'box' | 'cylinder' | 'washer',
+  shape: 'box' | 'cylinder' | 'washer' | 'chamfer',
   params: { width: number; depth: number; height: number; diameter: number; innerDiameter: number },
   threadOpts?: ThreadRenderOptions,
 ): THREE.Mesh {
@@ -134,6 +134,15 @@ export function createPrimitiveMesh(
     geometry = new THREE.BoxGeometry(params.width, params.depth, params.height);
   } else if (shape === 'cylinder') {
     geometry = cylinderOrThreadGeometry(params.diameter, params.height, threadOpts);
+  } else if (shape === 'chamfer') {
+    // A frustum, not a plain cylinder: wide (diameter) at the surface end,
+    // tapering down to innerDiameter — the diameter of the hole it's meant
+    // to blend into — at the buried end. See positionCutterAtSurface: for a
+    // subtractive cutter, this geometry's local +Z (built along Y, then
+    // rotated) ends up as the shallow/outward end, so radiusTop must be the
+    // wide (surface) diameter and radiusBottom the narrow (hole) one.
+    geometry = new THREE.CylinderGeometry(params.diameter / 2, params.innerDiameter / 2, params.height, 48);
+    geometry.rotateX(Math.PI / 2);
   } else {
     // Washer: outer cylinder minus inner cylinder, baked into one geometry via CSG.
     const outerGeo = new THREE.CylinderGeometry(params.diameter / 2, params.diameter / 2, params.height, 48);
@@ -198,7 +207,7 @@ export interface CompositeFeature {
   diameter: number;
   depth: number;
   threadId: string | null;
-  shape: 'box' | 'cylinder' | 'washer';
+  shape: 'box' | 'cylinder' | 'washer' | 'chamfer';
   operation: 'union' | 'subtract';
   width: number;
   height: number;

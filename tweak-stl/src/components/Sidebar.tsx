@@ -14,12 +14,21 @@ import {
   Scale,
   Shapes as ShapesIcon,
   SquarePlus,
+  Target,
   Torus as TorusIcon,
   Triangle,
   Box as BoxIcon,
   X,
 } from 'lucide-react';
-import { useAppStore, type PlaneAxis, type PrimitiveOp, type PrimitiveShape, type ToolId, type BasicShape } from '@/state/useAppStore';
+import {
+  useAppStore,
+  type PlaneAxis,
+  type PrimitiveOp,
+  type PrimitiveShape,
+  type PrimitiveToolState,
+  type ToolId,
+  type BasicShape,
+} from '@/state/useAppStore';
 import { THREAD_STANDARDS, THREAD_SYSTEM_LABELS, findThreadStandard, type ThreadSystem } from '@/utils/threadStandards';
 import { findPrinterProfile, threadPrintabilityWarning, effectivePrinterProfile } from '@/utils/printerProfiles';
 import { mmToDisplay, displayToMM, unitSuffix, type Units } from '@/utils/units';
@@ -34,6 +43,8 @@ const TOOL_TABS: { id: ToolId; label: string; icon: typeof Info }[] = [
   { id: 'shapes', label: 'New Part', icon: ShapesIcon },
   { id: 'planeCut', label: 'Cut', icon: Scissors },
   { id: 'mate', label: 'Mate', icon: Puzzle },
+  { id: 'chamfer', label: 'Chamfer', icon: Cone },
+  { id: 'counterbore', label: 'C-Bore', icon: Target },
   { id: 'measure', label: 'Measure', icon: Ruler },
 ];
 
@@ -457,12 +468,62 @@ const PRIMITIVE_SHAPES: { id: PrimitiveShape; label: string }[] = [
   { id: 'box', label: 'Block' },
   { id: 'cylinder', label: 'Cylinder' },
   { id: 'washer', label: 'Washer' },
+  { id: 'chamfer', label: 'Chamfer' },
 ];
 
 const PRIMITIVE_OPS: { id: PrimitiveOp; label: string }[] = [
   { id: 'union', label: 'Add (Union)' },
   { id: 'subtract', label: 'Cut (Subtract)' },
 ];
+
+/** Warns when a Quick Chamfer/Counterbore's diameter no longer actually clears the hole it was placed against — shown only when referenceHoleDiameterMM is set (i.e. this primitive was placed via the quick-detect flow, not typed in manually). */
+function ReferenceHoleWarning({ primitive }: { primitive: PrimitiveToolState }) {
+  const ref = primitive.referenceHoleDiameterMM;
+  if (ref == null) return null;
+  const clearDiameter = primitive.shape === 'chamfer' ? primitive.innerDiameter : primitive.diameter;
+  const label = primitive.shape === 'chamfer' ? 'inner diameter' : 'diameter';
+  if (clearDiameter >= ref - 0.001) return null;
+  return (
+    <p className="text-xs text-amber-500">
+      This hole is {ref.toFixed(2)}mm — the {label} here ({clearDiameter.toFixed(2)}mm) is smaller, so it won't fully clear it.
+    </p>
+  );
+}
+
+/**
+ * Chamfer and Counterbore aren't tools you configure up front — click near
+ * an existing hole and StitchMesh snaps to its true center/axis, reads its
+ * diameter, and hands off straight to the Modify panel (shape pre-set,
+ * point/normal/diameter already filled in from the hole) so you land right
+ * on the fields to check or adjust before Apply. This panel only ever
+ * shows the "waiting for that click" state — once it succeeds, the active
+ * tool switches to Modify automatically.
+ */
+function QuickFeaturePanel({ kind }: { kind: 'chamfer' | 'counterbore' }) {
+  const hasModel = useAppStore((s) => s.hasModel);
+  const label = kind === 'chamfer' ? 'Chamfer' : 'Counterbore';
+  return (
+    <div className="panel-section space-y-2">
+      <div className="panel-label">{label}</div>
+      {!hasModel ? (
+        <p className="text-sm text-slate-500">Load a model first.</p>
+      ) : (
+        <>
+          <p className="text-sm text-slate-400">
+            Click near an existing <strong>Hole</strong> feature's opening — StitchMesh snaps to its true center and axis direction
+            automatically, so you don't have to line anything up by hand.
+          </p>
+          <p className="text-[11px] text-slate-500">
+            {kind === 'chamfer'
+              ? "Opens the Modify panel with a cone already sized to blend into that hole — Diameter is the wider opening at the surface, Inner Diameter matches the hole exactly, and Depth defaults to a clean 45° bevel. Adjust any of them, or click Apply as-is."
+              : 'Opens the Modify panel with a straight recess already centered on that hole, sized for a bolt head to sit in — check Diameter and Depth against your actual hardware, then click Apply.'}
+          </p>
+          <p className="text-[11px] text-slate-600">Clicking somewhere that isn't close to a hole does nothing — try again closer to its opening.</p>
+        </>
+      )}
+    </div>
+  );
+}
 
 function PrimitivePanel() {
   const { primitive, hasModel, parts, setPrimitive, viewportActions } = useAppStore();
@@ -489,7 +550,7 @@ function PrimitivePanel() {
         </>
       ) : (
         <>
-          <div className="grid grid-cols-3 gap-1">
+          <div className="grid grid-cols-4 gap-1">
             {PRIMITIVE_SHAPES.map((s) => (
               <button
                 key={s.id}
@@ -532,6 +593,7 @@ function PrimitivePanel() {
                     : 'Internal thread — cut into the model as a tapped hole.'}
                 </p>
               )}
+              <ReferenceHoleWarning primitive={primitive} />
             </>
           )}
           {primitive.shape === 'washer' && (
@@ -539,6 +601,18 @@ function PrimitivePanel() {
               <NumberField label="Outer Diameter" value={primitive.diameter} onChange={(v) => setPrimitive({ diameter: v })} />
               <NumberField label="Inner Diameter" value={primitive.innerDiameter} onChange={(v) => setPrimitive({ innerDiameter: v })} />
               <NumberField label="Height" value={primitive.height} onChange={(v) => setPrimitive({ height: v })} />
+            </>
+          )}
+          {primitive.shape === 'chamfer' && (
+            <>
+              <NumberField label="Diameter" value={primitive.diameter} onChange={(v) => setPrimitive({ diameter: v })} />
+              <NumberField label="Inner Diameter" value={primitive.innerDiameter} onChange={(v) => setPrimitive({ innerDiameter: v })} />
+              <NumberField label="Depth" value={primitive.height} onChange={(v) => setPrimitive({ height: v })} />
+              <p className="text-[11px] text-slate-500">
+                A cone from <strong>Diameter</strong> at the surface down to <strong>Inner Diameter</strong> over <strong>Depth</strong> — set
+                Inner Diameter to match the hole it opens into for a clean blend, no visible step.
+              </p>
+              <ReferenceHoleWarning primitive={primitive} />
             </>
           )}
 
@@ -1108,6 +1182,8 @@ export default function Sidebar() {
       {activeTool === 'shapes' && <ShapesPanel />}
       {activeTool === 'planeCut' && <PlaneCutPanel />}
       {activeTool === 'mate' && <MatePanel />}
+      {activeTool === 'chamfer' && <QuickFeaturePanel kind="chamfer" />}
+      {activeTool === 'counterbore' && <QuickFeaturePanel kind="counterbore" />}
       {activeTool === 'measure' && <MeasurePanel />}
     </div>
   );
