@@ -248,6 +248,10 @@ interface AppState {
   printerProfileId: string;
   /** True once the user has actively picked a profile from the dropdown (Generic included) — false means it's still just the unconfirmed default. */
   printerProfileConfirmed: boolean;
+  /** User-picked nozzle diameter overriding the selected profile's stock nozzle, or null to use the stock size. Reset whenever the printer changes. */
+  nozzleOverrideMM: number | null;
+  /** Set by the viewport whenever the scene's combined bounding box no longer fits the selected printer's build volume; null when everything fits. */
+  buildVolumeWarning: string | null;
 
   activeTool: ToolId;
 
@@ -290,6 +294,8 @@ interface AppState {
   setShowBoundingBox: (on: boolean) => void;
   setSnapToGrid: (on: boolean) => void;
   setPrinterProfileId: (id: string) => void;
+  setNozzleOverrideMM: (mm: number | null) => void;
+  setBuildVolumeWarning: (warning: string | null) => void;
 
   setActiveTool: (tool: ToolId) => void;
 
@@ -403,6 +409,8 @@ export const useAppStore = create<AppState>((set) => ({
   snapGridSizeMM: 1,
   printerProfileId: GENERIC_PRINTER_ID,
   printerProfileConfirmed: false,
+  nozzleOverrideMM: null,
+  buildVolumeWarning: null,
 
   activeTool: 'select',
 
@@ -440,7 +448,12 @@ export const useAppStore = create<AppState>((set) => ({
   setFlatShading: (on) => set({ flatShading: on }),
   setShowBoundingBox: (on) => set({ showBoundingBox: on }),
   setSnapToGrid: (on) => set({ snapToGrid: on }),
-  setPrinterProfileId: (id) => set({ printerProfileId: id, printerProfileConfirmed: true }),
+  // A stale nozzle override could silently carry over to a printer that
+  // doesn't offer that size, or misrepresent one that does but at a
+  // different stock default — always reset it on a printer change.
+  setPrinterProfileId: (id) => set({ printerProfileId: id, printerProfileConfirmed: true, nozzleOverrideMM: null }),
+  setNozzleOverrideMM: (mm) => set({ nozzleOverrideMM: mm }),
+  setBuildVolumeWarning: (warning) => set({ buildVolumeWarning: warning }),
 
   setActiveTool: (tool) =>
     set((state) => ({

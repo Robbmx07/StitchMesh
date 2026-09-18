@@ -16,7 +16,7 @@ import {
 } from '@/utils/csgOperations';
 import { createBasicShapeGeometry, BASIC_SHAPE_LABELS } from '@/utils/shapeGeometry';
 import { findThreadStandard } from '@/utils/threadStandards';
-import { findPrinterProfile, recommendedThreadResolution } from '@/utils/printerProfiles';
+import { findPrinterProfile, recommendedThreadResolution, effectivePrinterProfile, buildVolumeWarning as computeBuildVolumeWarning } from '@/utils/printerProfiles';
 import { validateGeometry, repairWindingConsistency, mirrorGeometry, hasRepairableIssues, hasUnrepairableIssues } from '@/utils/meshRepair';
 import {
   useAppStore,
@@ -132,6 +132,8 @@ export default function Viewport3D() {
   const transformControlsRef = useRef<TransformControls | null>(null);
   const gizmoSceneRef = useRef<THREE.Scene | null>(null);
   const gizmoCameraRef = useRef<THREE.OrthographicCamera | null>(null);
+  const plateGridRef = useRef<THREE.GridHelper | null>(null);
+  const buildVolumeBoxRef = useRef<THREE.LineSegments | null>(null);
 
   // ---- part bookkeeping (each mesh carries userData.partId/partLabel) --
   const getAllPartMeshes = (): THREE.Mesh[] =>
@@ -213,6 +215,7 @@ export default function Viewport3D() {
         scene.remove(boxHelperRef.current);
         boxHelperRef.current = null;
       }
+      updateBuildVolumeWarning();
       return;
     }
     const box = new THREE.Box3().setFromObject(mesh);
@@ -228,6 +231,7 @@ export default function Viewport3D() {
       scene.add(helper);
       boxHelperRef.current = helper;
     }
+    updateBuildVolumeWarning();
   };
 
   const updateParts = () => {
@@ -363,12 +367,83 @@ export default function Viewport3D() {
   const getThreadRenderOptions = (threadId: string | null, isInternal: boolean): ThreadRenderOptions => {
     const thread = findThreadStandard(threadId);
     if (!thread) return { thread: null };
-    const profile = findPrinterProfile(useAppStore.getState().printerProfileId);
+    const state = useAppStore.getState();
+    const profile = effectivePrinterProfile(findPrinterProfile(state.printerProfileId), state.nozzleOverrideMM);
     return {
       thread,
       resolution: recommendedThreadResolution(profile, thread.majorDiameterMM, thread.pitchMM),
       clearanceMM: isInternal ? profile.internalThreadClearanceMM : 0,
     };
+  };
+
+  /**
+   * (Re)builds the build-plate grid and the printable-volume boundary box
+   * to match the selected printer's working area, so the environment is
+   * scaled to the machine — a Bambu A1 mini's 180mm plate looks and is
+   * sized differently from a Voron 2.4's 350mm one. X/Y are centered on
+   * the origin (matching the grid's existing convention); Z runs from the
+   * plate (0) up to the machine's max height, matching "drop to build
+   * plate" / Lock to Plate's Z=0 convention.
+   */
+  const rebuildPlateForProfile = () => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const profile = findPrinterProfile(useAppStore.getState().printerProfileId);
+    const { x: volX, y: volY, z: volZ } = profile.buildVolumeMM;
+
+    if (plateGridRef.current) {
+      scene.remove(plateGridRef.current);
+      plateGridRef.current.geometry.dispose();
+      (plateGridRef.current.material as THREE.Material).dispose();
+    }
+    // A square grid covering the larger footprint dimension so a non-square
+    // bed (e.g. Prusa MK4's 250x210) still shows full X/Y coverage.
+    const gridSpan = Math.max(volX, volY);
+    const divisions = Math.max(4, Math.round(gridSpan / 10)); // ~10mm squares
+    const grid = new THREE.GridHelper(gridSpan, divisions, 0x343b49, 0x252a35);
+    grid.rotateX(Math.PI / 2);
+    scene.add(grid);
+    plateGridRef.current = grid;
+
+    if (buildVolumeBoxRef.current) {
+      scene.remove(buildVolumeBoxRef.current);
+      buildVolumeBoxRef.current.geometry.dispose();
+      (buildVolumeBoxRef.current.material as THREE.Material).dispose();
+    }
+    const boxGeometry = new THREE.BoxGeometry(volX, volY, volZ);
+    const box = new THREE.LineSegments(
+      new THREE.EdgesGeometry(boxGeometry),
+      // Amber, matching the warning color used elsewhere once a part
+      // exceeds this envelope — distinct from the grid and from the
+      // selected-part bounding box (blue), and visible against both.
+      new THREE.LineBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.45, depthWrite: false }),
+    );
+    box.position.set(0, 0, volZ / 2); // base on the plate (Z=0), box extends up
+    box.name = 'BuildVolumeBoundary';
+    scene.add(box);
+    buildVolumeBoxRef.current = box;
+  };
+
+  /** Combined bounding box of every visible part, for the build-volume fit check (not just the selected part). Checks actual plate position, not just overall size. */
+  const updateBuildVolumeWarning = () => {
+    const meshes = getAllPartMeshes().filter((m) => m.visible);
+    if (meshes.length === 0) {
+      useAppStore.getState().setBuildVolumeWarning(null);
+      return;
+    }
+    const box = new THREE.Box3();
+    meshes.forEach((m) => box.expandByObject(m));
+    const profile = findPrinterProfile(useAppStore.getState().printerProfileId);
+    useAppStore.getState().setBuildVolumeWarning(
+      computeBuildVolumeWarning(profile, {
+        minX: box.min.x,
+        maxX: box.max.x,
+        minY: box.min.y,
+        maxY: box.max.y,
+        minZ: box.min.z,
+        maxZ: box.max.z,
+      }),
+    );
   };
 
   const maybeSnap = (value: number): number => {
@@ -665,9 +740,7 @@ export default function Viewport3D() {
     fill.position.set(-150, 200, -100);
     scene.add(fill);
 
-    const grid = new THREE.GridHelper(400, 40, 0x343b49, 0x252a35);
-    grid.rotateX(Math.PI / 2);
-    scene.add(grid);
+    rebuildPlateForProfile();
 
     const AXIS_LENGTH = 40;
     const axes = new THREE.AxesHelper(AXIS_LENGTH);
@@ -1989,6 +2062,17 @@ export default function Viewport3D() {
       if (state.showBoundingBox !== prev.showBoundingBox && boxHelperRef.current) {
         boxHelperRef.current.visible = state.showBoundingBox;
       }
+    });
+    return unsub;
+  }, []);
+
+  // ---- reactive: rescale the plate grid + build-volume box, and re-check
+  // the current scene against it, whenever the printer selection changes --
+  useEffect(() => {
+    const unsub = useAppStore.subscribe((state, prev) => {
+      if (state.printerProfileId === prev.printerProfileId) return;
+      rebuildPlateForProfile();
+      updateBuildVolumeWarning();
     });
     return unsub;
   }, []);

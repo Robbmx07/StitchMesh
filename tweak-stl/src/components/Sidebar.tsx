@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { useAppStore, type PlaneAxis, type PrimitiveOp, type PrimitiveShape, type ToolId, type BasicShape } from '@/state/useAppStore';
 import { THREAD_STANDARDS, THREAD_SYSTEM_LABELS, findThreadStandard, type ThreadSystem } from '@/utils/threadStandards';
-import { findPrinterProfile, threadPrintabilityWarning } from '@/utils/printerProfiles';
+import { findPrinterProfile, threadPrintabilityWarning, effectivePrinterProfile } from '@/utils/printerProfiles';
 import { mmToDisplay, displayToMM, unitSuffix, type Units } from '@/utils/units';
 import { BASIC_SHAPE_LABELS } from '@/utils/shapeGeometry';
 import { useNumberInput } from '@/hooks/useNumberInput';
@@ -143,7 +143,8 @@ function ThreadSelect({ value, onChange }: { value: string | null; onChange: (id
 
 function ThreadPrintabilityNote({ majorDiameterMM, pitchMM }: { majorDiameterMM: number; pitchMM: number }) {
   const printerProfileId = useAppStore((s) => s.printerProfileId);
-  const profile = findPrinterProfile(printerProfileId);
+  const nozzleOverrideMM = useAppStore((s) => s.nozzleOverrideMM);
+  const profile = effectivePrinterProfile(findPrinterProfile(printerProfileId), nozzleOverrideMM);
   const warning = threadPrintabilityWarning(profile, majorDiameterMM, pitchMM);
   if (!warning) return null;
   return <p className="text-xs text-amber-500">{warning}</p>;
@@ -219,6 +220,7 @@ function DimensionsReadout() {
   const dimensions = useAppStore((s) => s.dimensions);
   const hasModel = useAppStore((s) => s.hasModel);
   const units = useAppStore((s) => s.units);
+  const buildVolumeWarning = useAppStore((s) => s.buildVolumeWarning);
   return (
     <div className="panel-section">
       <div className="panel-label">Bounding Box</div>
@@ -235,6 +237,11 @@ function DimensionsReadout() {
         </div>
       ) : (
         <p className="text-sm text-slate-500">No model loaded.</p>
+      )}
+      {hasModel && buildVolumeWarning && (
+        <p className="mt-2 text-xs text-red-400">
+          {buildVolumeWarning} The faint boundary box in the viewport shows the plate's printable envelope.
+        </p>
       )}
     </div>
   );
@@ -853,6 +860,20 @@ function MovePanel() {
       {selectedPart?.lockToPlate && !selectedPart?.locked && (
         <p className="text-[11px] text-amber-500">Locked to plate — Z stays pinned to the build plate. Toggle it off in the Parts panel to move it.</p>
       )}
+
+      <div className="grid grid-cols-2 gap-2">
+        <button className="btn" disabled={!selectedPartId || !!selectedPart?.locked} onClick={() => viewportActions?.centerToOrigin()}>
+          Center to Origin
+        </button>
+        <button
+          className="btn"
+          disabled={!selectedPartId || !!selectedPart?.locked}
+          title="Sets Z so the part's lowest point rests on the build plate — the fix if scaling or rotating left it floating or clipping through the plate."
+          onClick={() => viewportActions?.dropToBuildPlate()}
+        >
+          Drop to Build Plate
+        </button>
+      </div>
 
       <div className="field-row">
         <label className="text-sm text-slate-300">Snap to grid</label>

@@ -294,7 +294,12 @@ in the scene is left alone.
 - **Scale** — X/Y/Z fields show the selected part's current size; typing a
   new value rescales it to that exact size. **Uniform** (on by default)
   keeps all three axes proportional when editing one field. See §6 for how
-  scaling interacts with that part's existing features.
+  scaling interacts with that part's existing features. Unlike Rotate,
+  scaling does **not** auto-drop the part back to the plate afterward — it
+  scales around the part's existing center, so a part that was resting on
+  the plate can end up floating above it or dipping below Z=0. Follow a
+  scale with **Drop to Build Plate** (below) if that matters for the part
+  you're working on.
 - **Rotate** — ±90° snap buttons per axis, plus a **free-angle** row:
   pick an axis, type any number of degrees, click **Rotate**. Rotating
   re-drops the part to the build plate afterward.
@@ -576,8 +581,8 @@ like a real tap cuts the mating shape of the bolt it's sized for. See
 
 ## 17. Printer profiles
 
-The toolbar's **Printer** dropdown tunes every threaded feature to a
-specific machine:
+The toolbar's **Printer** dropdown scales the whole working environment to
+a specific machine and tunes every threaded feature to it:
 
 ![Generic printer warning](manual-assets/17a-printer-generic.png)
 
@@ -591,6 +596,17 @@ whenever Generic is active, confirmed or not, since the underlying concern
 
 What the profile changes:
 
+- **Build plate and printable envelope** — the grid resizes to the
+  machine's actual bed footprint, and a faint amber wireframe box in the
+  viewport marks the full printable volume (bed footprint × max height),
+  so you can see at a glance whether a model fits — not just guess from a
+  number. Switching printers rescales both immediately.
+- **Build-volume warning** — if the combined, visible parts in the scene
+  no longer fit inside the selected printer's envelope, the toolbar shows
+  a red warning icon and the Info panel's Bounding Box section names which
+  axis (or axes) overflow and by how much. Export STL also stops to
+  confirm before proceeding if the model doesn't fit — a last check before
+  you'd otherwise find out on the printer.
 - **Mesh resolution** — radial facets and helical height-rings sized to
   the printer's nozzle/spot diameter and typical layer height.
 - **Internal-thread clearance** — a small diametral clearance added to
@@ -600,9 +616,37 @@ What the profile changes:
   than the nozzle can resolve, or the size is small enough (below roughly
   M4/#8) that a threaded insert would print more reliably.
 
-Included: Generic FDM, Bambu Lab X1 Carbon, Bambu Lab P1S, Prusa MK4,
-Creality Ender 3 V2, Creality K1C, Voron 2.4 (350mm), Ultimaker S5, Elegoo
-Saturn 3 (resin), Formlabs Form 4 (resin).
+### Nozzle diameter override
+
+A second dropdown appears next to the printer selector for any FDM
+machine — pick a different nozzle size if you've swapped in one other than
+the printer's stock nozzle (a 0.2mm nozzle for finer detail, or a 0.6/0.8mm
+one for faster, chunkier prints). This isn't cosmetic: nozzle diameter
+directly bounds how fine a thread crest/root the machine can resolve and
+what a sane layer height range is, so switching it changes the mesh
+resolution, printability warnings, and recommended layer height the same
+way picking a different printer would. Each printer offers the nozzle
+sizes actually documented for it (FlashForge's AD5X-style hotend swaps to
+0.25/0.6/0.8mm rather than the more common 0.2mm, for example); the
+dropdown is hidden entirely for resin printers, where there's no
+user-swappable nozzle — the spot size is fixed by the LCD/optics.
+
+### Included printers
+
+Every profile below is sourced from the manufacturer's own published specs
+(build volume, stock nozzle, layer height range) cross-checked against
+independent retailer/review listings — a printer is only included when
+those numbers were unambiguous and consistent, which is why the earlier,
+shorter list didn't grow indiscriminately.
+
+**FDM:** Generic FDM (0.4mm), Bambu Lab X1 Carbon, Bambu Lab P1S, Bambu Lab
+A1, Bambu Lab A1 mini, Prusa MK4, Prusa MINI+, Creality Ender 3 V2,
+Creality Ender-3 S1 Pro, Creality K1C, Creality K1 Max, FlashForge
+Adventurer 5M, FlashForge Adventurer 5M Pro, Anycubic Kobra 3, QIDI X-Max
+3, Voron 2.4 (350mm), Ultimaker S5.
+
+**Resin:** Elegoo Saturn 3, Elegoo Saturn 4 Ultra, Anycubic Photon Mono
+M5s, Formlabs Form 4.
 
 ---
 

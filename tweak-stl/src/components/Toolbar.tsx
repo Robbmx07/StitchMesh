@@ -16,7 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import { useAppStore, type OrthoView } from '@/state/useAppStore';
-import { PRINTER_PROFILES, GENERIC_PRINTER_ID } from '@/utils/printerProfiles';
+import { PRINTER_PROFILES, GENERIC_PRINTER_ID, findPrinterProfile } from '@/utils/printerProfiles';
 import type { Units } from '@/utils/units';
 
 const ORTHO_VIEWS: { id: OrthoView; label: string }[] = [
@@ -43,6 +43,9 @@ export default function Toolbar() {
     printerProfileId,
     printerProfileConfirmed,
     setPrinterProfileId,
+    nozzleOverrideMM,
+    setNozzleOverrideMM,
+    buildVolumeWarning,
     canUndo,
     canRedo,
     meshIssues,
@@ -50,6 +53,8 @@ export default function Toolbar() {
     units,
     setUnits,
   } = useAppStore();
+
+  const printerProfile = findPrinterProfile(printerProfileId);
 
   const handleOpenClick = async () => {
     if (window.stitchMesh) {
@@ -102,6 +107,13 @@ export default function Toolbar() {
       );
       if (!proceed) return;
       setPrinterProfileId(printerProfileId); // confirms the current (Generic) choice so this won't ask again
+    }
+    if (buildVolumeWarning) {
+      const proceed = window.confirm(
+        `${buildVolumeWarning}\n\nIt won't fit on the build plate as a single print — you'll need to reposition, scale it down, or split it (Plane Cut) first.\n\n` +
+          'Click OK to export anyway, or Cancel to go back and fix it.',
+      );
+      if (!proceed) return;
     }
     viewportActions?.exportSTL();
   };
@@ -183,6 +195,28 @@ export default function Toolbar() {
             title="Generic profile — thread accuracy may be reduced without your printer's exact specs. Pick your printer for tuned thread resolution and clearance."
             className="flex items-center text-amber-500"
           >
+            <AlertTriangle className="h-4 w-4" />
+          </span>
+        )}
+        {printerProfile.availableNozzleDiametersMM.length > 0 && (
+          <select
+            title="Nozzle diameter — overrides the printer's stock nozzle for thread resolution, printability warnings, and the recommended layer height range. Change this if you've swapped in a different nozzle (e.g. 0.2mm for finer detail)."
+            className="rounded border border-base-600 bg-base-900 px-2 py-1 text-sm text-slate-200 outline-none focus:border-accent-500"
+            value={nozzleOverrideMM ?? printerProfile.nozzleDiameterMM}
+            onChange={(e) => {
+              const mm = parseFloat(e.target.value);
+              setNozzleOverrideMM(mm === printerProfile.nozzleDiameterMM ? null : mm);
+            }}
+          >
+            {printerProfile.availableNozzleDiametersMM.map((mm) => (
+              <option key={mm} value={mm}>
+                {mm}mm nozzle{mm === printerProfile.nozzleDiameterMM ? ' (stock)' : ''}
+              </option>
+            ))}
+          </select>
+        )}
+        {buildVolumeWarning && (
+          <span title={buildVolumeWarning} className="flex items-center text-red-400">
             <AlertTriangle className="h-4 w-4" />
           </span>
         )}
