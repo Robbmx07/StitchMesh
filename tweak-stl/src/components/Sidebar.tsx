@@ -850,7 +850,8 @@ function MovePanel() {
         </p>
       )}
       <p className="text-[11px] text-slate-500">
-        Drag the arrows on the selected part directly in the viewport, or type exact positions below.
+        Drag the arrows on the selected part directly in the viewport, or type exact positions below. A part with Lock to plate on
+        (Parts panel) can also be dragged directly — left-click and slide it across the build plate, no arrows needed.
       </p>
       <NumberField label="Position X" value={position[0]} onChange={(v) => handlePositionChange(0, v)} />
       <NumberField label="Position Y" value={position[1]} onChange={(v) => handlePositionChange(1, v)} />

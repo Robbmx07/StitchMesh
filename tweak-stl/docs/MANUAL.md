@@ -1,9 +1,9 @@
 # StitchMesh — Complete User Manual
 
 *"Modify, don't model."* StitchMesh is an offline tool for making localized
-edits to an existing `.stl` file — resize a hole, add a threaded boss, cut
-a model in two and move the pieces apart, measure a clearance — without
-learning a full CAD package.
+edits to an existing `.stl` file — resize a hole, add a threaded boss, mate
+and weld two parts together, cut a model in two and move the pieces apart,
+measure a clearance — without learning a full CAD package.
 
 This manual walks through every feature with screenshots so you can find
 what you need quickly.
@@ -13,18 +13,19 @@ what you need quickly.
 ## 1. What StitchMesh is
 
 A four-panel app: a **toolbar** across the top (file, undo/redo, view,
-printer, display toggles), a collapsible **Parts panel** on the left
-listing every object in the scene as its own layer, a **3D viewport**
-filling the center, and a **context sidebar** on the right with seven tool
+units, printer, display toggles), a collapsible **Parts panel** on the
+left listing every object in the scene as its own layer, a **3D viewport**
+filling the center, and a **context sidebar** on the right with nine tool
 tabs whose contents change based on which is active: **Info, Transform,
-Hole, Primitive, Cut, Move, Measure**.
+Hole, Primitive, Shapes, Cut, Mate, Move, Measure**.
 
 ![Empty state](manual-assets/01-empty-state.png)
 
 *Empty state. Toolbar across the top (Open STL, Add Part, Export STL, New,
-Undo/Redo, view presets, printer picker, display toggles). Parts panel on
-the left, empty. Dark viewport with a grid and axes gizmo. Sidebar
-defaulted to Info, reporting "No model loaded."*
+Undo/Redo, view presets, unit toggle, printer picker, display toggles).
+Parts panel on the left, empty. Dark viewport with a grid, an axes gizmo,
+and the orientation cube in the bottom-left corner. Sidebar defaulted to
+Info, reporting "No model loaded."*
 
 StitchMesh is a single self-contained HTML file. Double-click it to open it
 in your browser and it works fully offline — no install, no server, and
@@ -40,8 +41,10 @@ browser's normal download flow, so your source file is never modified.
   pick a file. This *replaces* everything currently in the scene. Reading
   a file never modifies it on disk.
 - **Add Part**: imports another `.stl` as a second, independent object
-  next to the first, rather than replacing it — see §5 (Parts Panel).
-  If nothing is loaded yet, Add Part behaves exactly like Open STL.
+  next to the first, rather than replacing it — see §5 (Parts Panel). The
+  **Shapes** tab (§9) does the same thing for basic solids instead of an
+  imported file. If nothing is loaded yet, Add Part behaves exactly like
+  Open STL.
 - **New**: clears the current model (and its undo history). Asks for
   confirmation first if a model is loaded.
 - **Export STL**: saves the current scene — every part in it — as a new
@@ -49,7 +52,7 @@ browser's normal download flow, so your source file is never modified.
   never overwritten.
 
 **Printer-not-selected export gate**: the first time you click Export STL
-without having picked a printer profile (§14), a dialog interrupts:
+without having picked a printer profile (§18), a dialog interrupts:
 *"No printer selected yet... Click OK to export anyway with Generic, or
 Cancel to pick your printer first."* Accepting confirms Generic so it
 won't ask again.
@@ -58,19 +61,23 @@ won't ask again.
 
 *After import: the model renders, the part appears in the Parts panel on
 the left, and the Bounding Box readout (visible on every tab) reports the
-**selected part's** live X × Y × Z dimensions in millimeters.*
+**selected part's** live X × Y × Z dimensions.*
 
 ---
 
 ## 3. Viewport navigation
 
-- **Orbit**: left-click-drag, or **middle-click-drag**.
+- **Orbit**: **middle-click-drag only.** It re-centers on whatever's under
+  the cursor the moment you press the button, rather than orbiting around
+  a fixed point — click near a corner and drag, and the view pivots
+  around that corner.
 - **Pan**: right-click-drag.
 - **Zoom**: scroll wheel.
-- **Middle-click-drag re-centers on whatever's under the cursor** the
-  moment you press the button, rather than orbiting around a fixed point
-  — click near a corner and drag, and the view pivots around that corner.
-  Left-drag orbits around the same shared pivot.
+- **Left-click** is deliberately *not* an orbit control — it's reserved
+  for tool actions (Hole, Primitive, Mate, Measure, picking a local
+  origin) and for directly dragging a part that's **locked to the build
+  plate** across it (§5, §12). Left-clicking empty space or an unlocked
+  part does nothing.
 - **View presets** (toolbar): **Top / Front / Side / Iso**, or press
   **1 / 2 / 3 / 4** on the keyboard.
 
@@ -79,6 +86,12 @@ the left, and the Bounding Box readout (visible on every tab) reports the
 *Top preset. Presets re-frame and re-target the camera to the whole
 scene's **current** bounding box, so they stay useful after scaling,
 moving parts apart, or cutting.*
+
+**Orientation cube**: the small cube in the viewport's bottom-left corner
+always shows the current view orientation, rotating in sync with the main
+view — turn the model and the cube turns with it. Each face is labeled:
+the bright **X** / **Y** / **Z** faces point along the positive axis, the
+matching darker **-X** / **-Y** / **-Z** faces point the other way.
 
 **Display toggles** (toolbar icons, or keyboard **W** / **B**):
 
@@ -90,7 +103,8 @@ moving parts apart, or cutting.*
 
 ![Wireframe](manual-assets/04-wireframe.png)
 
-*Wireframe on, from the Iso preset.*
+*Wireframe on, from the Iso preset. The orientation cube sits in the
+bottom-left corner throughout.*
 
 ### Keyboard shortcuts reference
 
@@ -106,42 +120,62 @@ Shortcuts are suppressed while typing in any text field or dropdown.
 
 ---
 
-## 4. Undo / Redo
+## 4. Units — millimeters or inches
+
+The **mm / in** toggle in the toolbar switches every length field in the
+app — Bounding Box, Scale, Position, Diameter/Depth, Local Origin,
+Offset-from-origin, and Measure — between millimeters and inches.
+
+![Bounding box in millimeters](manual-assets/05a-units-mm.png)
+![Bounding box in inches](manual-assets/05b-units-inches.png)
+
+*The same 20mm cube: Bounding Box reads 20.0mm in the left shot, 0.787in
+in the right after switching units. Nothing about the model itself
+changes — StitchMesh always stores geometry in millimeters internally;
+the toggle only changes how numbers are displayed and typed.*
+
+You can type in either unit at any time — switch to inches, type a
+diameter in inches, switch back to mm, and the value converts correctly
+both ways.
+
+---
+
+## 5. Undo / Redo
 
 Toolbar: the two curved-arrow icons next to New, or `Ctrl+Z` / `Ctrl+Y`.
-Every committed change is undoable: Hole/Primitive/Plane Cut apply,
-feature edits and deletes, Transform actions (scale, rotate, center, drop,
-mirror), Move, adding a part, and mesh repair. Continuous edits (typing
-digits into a Scale or Move field) are coalesced into a single undo step
-per edit session rather than one step per keystroke; discrete actions (a
-button click) are always their own step.
+Every committed change is undoable: Hole/Primitive/Plane Cut/Mate/Weld
+apply, feature edits and deletes, Transform actions (scale, rotate,
+center, drop, mirror), Move (including a drag), adding a part or shape,
+and mesh repair. Continuous edits (typing digits into a field, or a drag)
+are coalesced into a single undo step per edit session rather than one
+step per keystroke/frame; discrete actions (a button click) are always
+their own step.
 
-![Before undo](manual-assets/05a-before-undo.png) ![After undo](manual-assets/05b-after-undo.png)
+![Before undo](manual-assets/06a-before-undo.png) ![After undo](manual-assets/06b-after-undo.png)
 
 *Left: a hole applied. Right: immediately after `Ctrl+Z` — back to the
 unmodified cube. Redo (button or `Ctrl+Y`) reapplies it.*
 
 ---
 
-## 5. Parts panel: layers, features, and local origin
+## 6. Parts panel: layers, features, local origin, and lock to plate
 
 The **Parts** panel on the left lists every object currently in the scene
 — the first import and anything added afterward — as its own **layer**,
 collapsible via the `«` button in its header.
 
-![Parts panel with a layered feature](manual-assets/06-parts-panel.png)
+![Parts panel with a layered feature](manual-assets/07a-parts-panel.png)
 
 *Two independent parts. `cubeA.stl` has one feature nested under it,
-**Hole 1** — its own lock and delete icons sit to the right of the label.
-`cubeB.stl` has none yet. Each part also carries its own Local Origin
-editor (see below).*
+**Hole 1** — its own lock and delete icons sit to the right of the label,
+and an anchor icon at the far right of each part's own row is its
+**Lock to plate** toggle (see below). `cubeB.stl` has no features yet.
+Each part also carries its own Local Origin editor.*
 
-**Each part is fully independent** — this is the fix for a real bug in an
-earlier build, where scaling, rotating, centering, or dropping one part
-after moving another moved or resized *both*. Selecting a part (click its
-row, or use the **Part** dropdown on the Move/Cut tabs) makes it the
-target for Transform, Move, Mirror, and Plane Cut; none of those actions
-touch any other part.
+**Each part is fully independent** — selecting a part (click its row, or
+use the **Part** dropdown on the Move/Cut tabs) makes it the target for
+Transform, Move, Mirror, and Plane Cut; none of those actions touch any
+other part.
 
 ### Feature layers
 
@@ -156,19 +190,18 @@ of being baked in and forgotten:
   can't be accidentally changed; click the feature and every field is
   replaced with a locked notice until you unlock it again from the same
   icon.
-- **Delete icon** (trash) — removes that one feature immediately (with a
-  confirmation-free but fully undoable delete — `Ctrl+Z` brings it right
-  back).
+- **Delete icon** (trash) — removes that one feature immediately (fully
+  undoable — `Ctrl+Z` brings it right back).
 
-![Editing a feature, with reference centerlines](manual-assets/06b-feature-edit.png)
+![Editing a feature, with reference centerlines](manual-assets/07b-feature-edit.png)
 
 *Clicking **Hole 1** reopens it for editing: the sidebar shows its current
 Diameter/Depth/Thread, a Δ-from-center readout, and Offset-from-origin
-fields (below). Two dashed cyan lines mark the part's own center on the
-two axes not aligned with the hole's drilling direction, so you can see at
-a glance how far off-center it sits.*
+fields. Two dashed cyan lines mark the part's own center on the two axes
+not aligned with the hole's drilling direction, so you can see at a
+glance how far off-center it sits.*
 
-![A locked feature](manual-assets/06c-feature-locked.png)
+![A locked feature](manual-assets/07c-feature-locked.png)
 
 *Reopening a locked feature shows a notice instead of editable fields.
 Unlock it from the Parts panel (the same lock icon) to make changes again.*
@@ -177,8 +210,7 @@ Unlock it from the Parts panel (the same lock icon) to make changes again.*
 as long as you don't change that part's *scale*. Scaling a part (Transform
 → Scale) permanently folds every existing feature on that part into its
 base shape — the holes/bosses stay exactly where they are, just no longer
-individually re-editable afterward. Add or edit features after you've
-settled on a part's final scale to keep them adjustable.
+individually re-editable afterward.
 
 ### Local origin
 
@@ -191,58 +223,67 @@ Under a part's feature list:
 - **Reset icon** — puts the origin back at the part's own center.
 - **X / Y / Z fields** — type an exact origin position directly.
 
-![Setting a local origin and offset placement](manual-assets/06d-local-origin.png)
+![Setting a local origin and offset placement](manual-assets/07d-local-origin.png)
 
-*The origin was picked at a corner of `cubeA.stl` (fields read roughly
-−15, −10, ~0). Placing a primitive on the neighboring part then shows
-**Offset from local origin** X/Y/Z fields — type an exact position (e.g.
-X = 5, Z = −8) instead of relying on where you clicked. The axis running
-along your click's surface normal is usually best left alone, since
-changing it can lift the feature off the part's surface entirely.*
+*The origin was picked at a corner of `cubeA.stl`. Placing a feature then
+shows **Offset from local origin** X/Y/Z fields — type an exact position
+instead of relying on where you clicked.*
 
 This is the tool for the "block with two holes a precise quarter-inch from
 each edge" case: set the origin at a bottom corner of the face you care
 about, click roughly the right face to establish the drilling direction,
 then type the exact X/Y/Z offsets for each hole.
 
-![Collapsed parts panel](manual-assets/06e-parts-panel-collapsed.png)
+### Lock to plate
+
+The anchor icon on each part's own row toggles **Lock to plate**. Turning
+it on immediately drops that part to the build plate (Z=0) and keeps it
+pinned there afterward:
+
+- The Move tool's Z field and Z-nudge buttons become disabled for that
+  part, and its viewport drag gizmo hides its Z handle.
+- You can **left-click-drag the part directly in the viewport** — no
+  gizmo arrows needed — and it slides across the plate in X/Y only. See
+  §12 (Move tool).
+
+![A part locked to the build plate, with the Move drag gizmo showing no Z handle](manual-assets/07e-lock-to-plate.png)
+
+*`cubeA.stl` is locked to plate: the Move panel's Z field is disabled with
+an explanatory note, and the drag gizmo on the model shows only the red
+(X) and green (Y) arrows — no blue Z arrow.*
+
+![Collapsed parts panel](manual-assets/07f-parts-panel-collapsed.png)
 
 *Collapsed to a thin strip via the `«` button — click the arrow to expand
-it again. The panel remembers nothing is lost; it's purely a display
-toggle.*
+it again. Purely a display toggle; nothing about the scene changes.*
 
 ---
 
-## 6. Transform tool
+## 7. Transform tool
 
-Tab: **Transform**. Affects only the **selected part** (Parts panel, or
-any part-picking dropdown) — every other part in the scene is left alone.
+Tab: **Transform**. Affects only the **selected part** — every other part
+in the scene is left alone.
 
-![Transform panel](manual-assets/07-transform-panel.png)
+![Transform panel](manual-assets/08-transform-panel.png)
 
-- **Scale** — X/Y/Z fields show the selected part's current size in mm;
-  typing a new value rescales it to that exact size. **Uniform** (on by
-  default) keeps all three axes proportional when editing one field. See
-  §5 for how scaling interacts with that part's existing features.
+- **Scale** — X/Y/Z fields show the selected part's current size; typing a
+  new value rescales it to that exact size. **Uniform** (on by default)
+  keeps all three axes proportional when editing one field. See §6 for how
+  scaling interacts with that part's existing features.
 - **Rotate** — ±90° snap buttons per axis, plus a **free-angle** row:
-  pick an axis, type any number of degrees, click **Rotate**. Both use the
-  same underlying rotation — the snap buttons are just a fast path for the
-  most common angle. Rotating re-drops the part to the build plate
-  afterward.
+  pick an axis, type any number of degrees, click **Rotate**. Rotating
+  re-drops the part to the build plate afterward.
 - **Center to Origin** — recenters that part's bounding box at world
   (0,0,0) on all three axes.
 - **Drop to Build Plate** — Z-only: shifts so the part's lowest point sits
   at Z=0. Runs automatically once on import too.
-- **Mirror** — flips the part across X, Y, or Z through its own center.
-  Unlike a naive negative-scale mirror (which leaves every face pointing
-  the wrong way and, on a part not centered at the world origin, would
-  relocate it entirely), StitchMesh bakes the mirror into the geometry in
-  that part's own local frame, with corrected winding, so it flips exactly
-  in place and raycasting/further edits keep working correctly afterward.
+- **Mirror** — flips the part across X, Y, or Z through its own center,
+  with corrected winding, so it flips exactly in place and raycasting/
+  further edits keep working correctly afterward.
 
 ---
 
-## 7. Hole Modifier
+## 8. Hole Modifier
 
 Tab: **Hole**. Cuts a cylindrical (or threaded) hole at a point you click.
 
@@ -251,35 +292,35 @@ sidebar shows Diameter, Depth, Thread, an offset/center readout, and
 **Apply Boolean Subtract** / **Cancel**. The part you clicked becomes the
 target automatically — no extra selection step, even with multiple
 objects in the scene. The result is saved as its own editable layer under
-that part — see §5 to reopen, lock, or delete it later.
+that part — see §6 to reopen, lock, or delete it later.
 
-- **Diameter** / **Depth** (mm) — free-typed when Thread is "Smooth (no
+- **Diameter** / **Depth** — free-typed when Thread is "Smooth (no
   thread)". **Depth means depth**: the full stated value is removed from
   the material, drilling *into* the surface from the clicked point (not
   split half in/half out).
-- **Thread** — a dropdown of standard hardware sizes (§13). Picking one
+- **Thread** — a dropdown of standard hardware sizes (§17). Picking one
   locks Diameter to that thread's exact major diameter and cuts a real
   helical thread instead of a smooth cylinder.
 - **Δ from part center** / **Offset from local origin** — two reference
-  readouts (§5) once the cutter is placed. The offset fields are editable:
+  readouts (§6) once the cutter is placed. The offset fields are editable:
   type exact X/Y/Z numbers to nudge the hole precisely instead of
   re-clicking.
 
-![Threaded hole applied](manual-assets/08-hole-threaded.png)
+![Threaded hole applied](manual-assets/09-hole-threaded.png)
 
 *3/8-16 UNC hole applied: a visible internal thread spiraling down the
 bore, generated from the same geometry a real tap would cut.*
 
 ---
 
-## 8. Primitive Add/Subtract
+## 9. Primitive Add/Subtract
 
 Tab: **Primitive**. Places a block, cylinder, or washer and unions (adds)
 or subtracts it from a part at a clicked point — same click-to-place,
 auto-targeting flow as Hole, and it's saved the same way: as its own
-editable, lockable, deletable layer under the target part (§5).
+editable, lockable, deletable layer under the target part (§6).
 
-![Primitive panel](manual-assets/09a-primitive-panel.png)
+![Primitive panel](manual-assets/10a-primitive-panel.png)
 
 - **Shape**: Block / Cylinder / Washer.
 - **Operation**: **Add (Union)** fuses it onto the model as a new
@@ -290,21 +331,91 @@ editable, lockable, deletable layer under the target part (§5).
   becomes an external thread (a boss/stud); with **Cut** an internal
   thread (a tapped hole) — the caption updates to say which.
 
-![Threaded boss applied](manual-assets/09b-primitive-threaded-boss.png)
+![Threaded boss applied](manual-assets/10b-primitive-threaded-boss.png)
 
-*M8 × 1.25, Add (Union), 12mm tall, placed on the top face. Bounding-box Z
-grew from 20.0 to 31.5mm — the full 12mm (minus a deliberate ~0.5mm embed
-fused into the surface for a clean, non-degenerate boolean). It shows up
-in the Parts panel as "Add cylinder 1" under the target part.*
+*M8 × 1.25, Add (Union), 12mm tall, placed on the top face. It shows up in
+the Parts panel as "Add cylinder 1" under the target part.*
 
 ---
 
-## 9. Plane Cut
+## 10. Shapes toolbox
+
+Tab: **Shapes**. Adds a brand-new **independent part** built from a basic
+solid — different from Primitive (§9), which modifies an existing part.
+
+![Shapes toolbox panel](manual-assets/11a-shapes-panel.png)
+
+- **Shape**: Cube, Cylinder, Sphere, Cone, Pyramid, or Torus.
+- **Dimensions**: fields change to match the shape (Width/Depth/Height for
+  a cube; Diameter for a sphere; Diameter + Height for a cylinder, cone,
+  or pyramid; Outer + Tube Diameter for a torus).
+- **Split in half on create** — an optional checkbox with an axis
+  picker: creates the shape and immediately slices it into two separate
+  parts along that axis (the same math as Plane Cut, §13), sitting
+  exactly where the whole shape would have been.
+- **Add to Scene** (or **Add Shape** if nothing's loaded yet) — drops the
+  new part beside whatever's already in the scene, or centered and on the
+  build plate if it's the first thing you've added.
+
+![Two shapes added as independent parts](manual-assets/11b-shapes-added.png)
+
+*A Cube and a Cylinder, each its own independent part in the Parts
+panel — ready to be moved, mated, or modified separately.*
+
+---
+
+## 11. Mate & Weld
+
+Tab: **Mate**. "Smart-fits" two parts flush against each other — a face on
+one part is rotated and slid until it touches a face on the other,
+facing it — while keeping them as two separate, independently movable
+parts. **Weld** then permanently merges them, if you want that.
+
+**Workflow**:
+
+1. Click **Mate** → click a face on the **first (stationary)** part.
+2. Click a face on the **second** part — the one that will move.
+3. Click **Fit** — StitchMesh rotates and slides the second part so that
+   face sits flush against the first, facing it.
+
+![Ready to pick the second part's face](manual-assets/12a-mate-pick-second.png)
+
+*After clicking a face on the first part, click a face on a different
+part to mate it to.*
+
+![Two parts fitted flush](manual-assets/12b-mate-fitted.png)
+
+*A cylinder fitted flush against a cube's face — still two separate parts
+in the Parts panel. **Re-fit** repeats the fit if you've moved something;
+**Start Over** clears the picks and starts again.*
+
+- **Flush Edge (optional)** — once fitted, click **Pick Edge Points**,
+  then click a reference point near an edge or corner on each part.
+  **Align Edge** then slides the second part *within* the mated plane
+  (the flush contact from Fit is preserved) so those two points line up —
+  useful for centering a boss on a face or aligning a corner exactly.
+  This is a point-to-point alignment, not true edge detection, so pick
+  points as close to the actual edge/corner you mean as you can.
+- **Weld** — a real boolean union that permanently merges the two mated
+  parts into one. They can no longer be moved independently afterward,
+  and neither part's prior feature layers (§6) carry over as separately
+  editable on the merged result.
+
+Because StitchMesh works on triangle meshes rather than true CAD faces, a
+"face" here means whatever flat surface you click, and "flush" means the
+two clicked surfaces' planes touch with their normals pointing at each
+other — it works well for flat faces on blocks, bosses, and similar
+shapes, and won't recognize curved or compound surfaces as a single face
+the way a parametric CAD face would.
+
+---
+
+## 12. Plane Cut
 
 Tab: **Cut**. Splits the target part into **two independent, separately
 selectable parts** along an axis-aligned plane.
 
-![Plane cut panel](manual-assets/10a-planecut-panel.png)
+![Plane cut panel](manual-assets/13-planecut-panel.png)
 
 - **Part** selector — only shown once more than one part exists.
 - **Axis** — X / Y / Z, the cutting plane's normal.
@@ -322,33 +433,46 @@ selectable parts** along an axis-aligned plane.
 
 ---
 
-## 10. Move tool
+## 13. Move tool
 
-Tab: **Move**. Selects a part and repositions it — this is what actually
-separates Plane Cut's two halves (or arranges an added part).
+Tab: **Move**. Selects a part and repositions it — either directly in the
+viewport, or with the numeric fields.
 
-![Move panel before separating](manual-assets/10b-move-panel-before-separate.png)
+![Move panel before separating](manual-assets/14a-move-panel-before-separate.png)
 
 *Right after a Plane Cut: two selectable parts exist in the Parts panel
 (`cube.stl (upper)` / `(lower)`), but they still occupy the same space.*
 
+- **Drag gizmo** — the selected part gets colored arrows (and a small
+  plane handle) directly in the viewport. Drag an arrow to move along
+  just that axis, or the plane handle to move in two axes at once.
+- **Left-click-drag directly on a locked part** — if the part has
+  **Lock to plate** on (§6), you don't need the gizmo arrows at all: just
+  left-click anywhere on the part and drag — it slides across the build
+  plate in X/Y, Z always pinned.
+
+![The drag gizmo on the selected part](manual-assets/14b-move-drag-gizmo.png)
+
+*Red (X) and green (Y) arrows and a blue plane-handle square on the
+selected part. Since this part is locked to plate, there's no blue Z
+arrow — dragging is constrained to the build plate automatically.*
+
 - **Part** dropdown — pick which object to move (hidden with only one
   part; you can also just click its row in the Parts panel).
-- **Position X / Y / Z** — absolute world position in mm; typing a value
-  moves the part there directly.
-- **Snap to grid** — checkbox; when on, typed positions round to the
-  nearest 1mm.
-- **Nudge buttons** (−/+ per axis) — step by the grid size (1mm, or the
-  snap size if enabled).
+- **Position X / Y / Z** — absolute position; typing a value moves the
+  part there directly. Z is disabled while Lock to plate is on.
+- **Snap to grid** — checkbox; when on, typed positions and drags round to
+  the nearest 1mm (or your chosen grid size).
+- **Nudge buttons** (−/+ per axis) — step by the grid size.
 
-![Move panel after separating](manual-assets/10c-move-panel-separated.png)
+![Move panel after separating](manual-assets/14c-move-panel-separated.png)
 
 *The `(upper)` piece moved to Z=35: the two halves are now visibly
 separate, independently selectable, and still export together.*
 
 ---
 
-## 11. Measurement tool
+## 14. Measurement tool
 
 Tab: **Measure**. Click a **datum** (reference point), then click a second
 point to read the distance and per-axis offset — useful for checking
@@ -360,14 +484,14 @@ connecting line) → the panel shows straight-line **Distance** and
 **ΔX / ΔY / ΔZ**. Click again anywhere to re-measure from the same datum
 without resetting it. **Reset Datum** clears both points.
 
-![Measure tool](manual-assets/11-measure-tool.png)
+![Measure tool](manual-assets/15-measure-tool.png)
 
 *Datum (green) and measured point (orange) on the same cube, with the
 distance and per-axis deltas shown in the panel.*
 
 ---
 
-## 12. Mesh validation & auto-repair
+## 15. Mesh validation & auto-repair
 
 Every import — the first model or an added part — is checked for two
 kinds of defect and handled differently:
@@ -387,7 +511,7 @@ kinds of defect and handled differently:
   since closing a hole means guessing a shape. Instead, a dismissible
   banner appears in the toolbar.
 
-![Mesh issue banner](manual-assets/12-mesh-issue-banner.png)
+![Mesh issue banner](manual-assets/16-mesh-issue-banner.png)
 
 *A model with one triangle deliberately removed: "cube-with-hole.stl: 3
 open edge(s)" with a dismiss (✕) button. The banner is informational only
@@ -395,7 +519,7 @@ open edge(s)" with a dismiss (✕) button. The banner is informational only
 
 ---
 
-## 13. Thread generator & standard sizes
+## 16. Thread generator & standard sizes
 
 Both the Hole and Primitive (cylinder) tools share one **Thread** dropdown
 with three groups:
@@ -426,18 +550,18 @@ like a real tap cuts the mating shape of the bolt it's sized for. See
 
 ---
 
-## 14. Printer profiles
+## 17. Printer profiles
 
 The toolbar's **Printer** dropdown tunes every threaded feature to a
 specific machine:
 
-![Generic printer warning](manual-assets/13a-printer-generic.png)
+![Generic printer warning](manual-assets/17a-printer-generic.png)
 
 *Default: "Generic FDM (0.4mm nozzle)" with a warning triangle — shown
 whenever Generic is active, confirmed or not, since the underlying concern
 (no machine-specific tuning) is still true either way.*
 
-![Printer selected](manual-assets/13b-printer-selected.png)
+![Printer selected](manual-assets/17b-printer-selected.png)
 
 *After picking "Prusa MK4": the warning icon clears.*
 
@@ -458,7 +582,7 @@ Saturn 3 (resin), Formlabs Form 4 (resin).
 
 ---
 
-## 15. Every control, at a glance
+## 18. Every control, at a glance
 
 | Location | Control | Does |
 |---|---|---|
@@ -468,14 +592,21 @@ Saturn 3 (resin), Formlabs Form 4 (resin).
 | Toolbar | New | Clear the model (confirms first) |
 | Toolbar | Undo / Redo | Step back/forward through edit history (`Ctrl+Z` / `Ctrl+Y`) |
 | Toolbar | Top / Front / Side / Iso | Jump to a preset camera framing (`1`–`4`) |
+| Toolbar | mm / in | Switch every length field between millimeters and inches |
 | Toolbar | Printer dropdown | Select target printer; tunes thread resolution/clearance |
 | Toolbar | Wireframe / Flat shading / Bounding box | Display toggles (`W` / — / `B`) |
 | Parts panel | Part row | Select that part as the active target; expand/collapse its features |
+| Parts panel | Anchor icon | Toggle Lock to plate for that part |
 | Parts panel | Feature row | Reopen a Hole/Primitive for editing |
-| Parts panel | Lock icon | Freeze/unfreeze a feature against edits |
+| Parts panel | Lock icon (on a feature) | Freeze/unfreeze a feature against edits |
 | Parts panel | Trash icon | Delete a feature |
 | Parts panel | Pin / Reset / X,Y,Z | Set, reset, or type a part's local origin |
 | Parts panel | `«` / `»` | Collapse/expand the whole panel |
+| Viewport | Middle-drag | Orbit (re-centers on what's under the cursor) |
+| Viewport | Right-drag | Pan |
+| Viewport | Scroll | Zoom |
+| Viewport | Left-click-drag on a locked part | Slide it across the build plate |
+| Viewport | Bottom-left cube | Shows current view orientation (X/Y/Z labeled faces) |
 | Sidebar → Info | (read-only) | File name, selected part's bounding box |
 | Sidebar → Transform | Scale X/Y/Z, Uniform | Resize the selected part |
 | Sidebar → Transform | Rotate ±90° (×3 axes), Free angle | Rotate the selected part |
@@ -485,62 +616,79 @@ Saturn 3 (resin), Formlabs Form 4 (resin).
 | Sidebar → Hole | Offset from local origin X/Y/Z | Fine-tune placement numerically |
 | Sidebar → Hole | Apply Boolean Subtract / Save Changes / Cancel / Delete Feature | Commit, update, discard, or remove |
 | Sidebar → Primitive | Shape, Operation, dimensions, Thread | Configure a primitive after clicking a point |
-| Sidebar → Primitive | Offset from local origin X/Y/Z | Fine-tune placement numerically |
 | Sidebar → Primitive | Apply / Save Changes / Cancel / Delete Feature | Commit, update, discard, or remove |
+| Sidebar → Shapes | Shape, dimensions, Split in half | Configure a new standalone part |
+| Sidebar → Shapes | Add to Scene | Create the new part |
 | Sidebar → Cut | Part, Axis, Height, Apply Cut | Split the target part in two |
-| Sidebar → Move | Part, Position X/Y/Z, Snap, nudge | Reposition a part |
+| Sidebar → Mate | (click two faces) | Pick which parts and faces to mate |
+| Sidebar → Mate | Fit / Re-fit | Rotate + slide part B flush against part A |
+| Sidebar → Mate | Pick Edge Points, Align Edge | Fine-align B within the mated plane |
+| Sidebar → Mate | Weld | Permanently merge A and B into one part |
+| Sidebar → Move | Part, Position X/Y/Z, Snap, nudge | Reposition a part numerically |
 | Sidebar → Measure | (click viewport) | Set datum, measure distance/deltas |
-| Viewport | Left/middle-drag, right-drag, scroll | Orbit, pan, zoom |
 
 ---
 
-## 16. Accuracy & validity review
+## 19. Accuracy & validity review
 
 A full-codebase review (an automated correctness pass, plus manual
-re-derivation of the placement math for every tool) has been run three
-times across this project's development. All findings below are **already
-fixed**.
+re-derivation of the placement math for every tool) has been run across
+several rounds of this project's development. All findings below are
+**already fixed**.
 
-**From the first two passes:**
+**From earlier passes:**
 1. **Hole/Primitive depth was silently halved** — the cutter was centered
-   on the clicked point instead of driven into the surface. Fixed
-   (`positionCutterAtSurface`); confirmed by drilling a hole deeper than
-   the material and verifying it broke through the far face.
+   on the clicked point instead of driven into the surface. Fixed;
+   confirmed by drilling a hole deeper than the material and verifying it
+   broke through the far face.
 2. **Plane Cut's default height (0) was a silent no-op** on any
    build-plate-dropped model. Fixed to auto-default to the target's
    actual center.
-3. A coordinate-space bug (using each mesh's local transform instead of
-   its world transform in the CSG boolean) that could silently miss
-   entirely after a prior scale/rotate. Fixed; still holds under every
-   later round of testing.
-4. Mesh repair, Mirror, undo/redo, snap-to-grid, and free-angle rotation
-   were each verified with dedicated synthetic tests (deliberately flipped
-   and inside-out meshes, an intentional open hole, exact round-trip
-   triangle counts across apply → undo → redo, fractional-position
-   snapping, and 45° rotation bounding-box math) — all correct.
+3. A coordinate-space bug that could silently miss a boolean entirely
+   after a prior scale/rotate. Fixed.
+4. **Transform previously acted on the whole scene instead of the
+   selected part** — scaling or dropping one part after moving another
+   moved or resized both. Root-caused to Hole/Primitive booleans baking
+   each part's *world* transform into its geometry; fixed by compositing
+   features entirely in each part's own stable local frame, verified by
+   scaling/rotating/centering/dropping one part of a two-part scene and
+   confirming the other's position stayed byte-for-byte identical. The
+   same fix closed a latent Mirror bug (mirroring an off-center part used
+   to relocate it instead of flipping it in place).
+5. Mesh repair, undo/redo, snap-to-grid, free-angle rotation, and the full
+   feature-layer lifecycle (add/edit/lock/delete) were each verified with
+   dedicated synthetic tests — all correct.
 
-**From the parts/layers pass (this revision):**
-- **The headline bug**: Transform's Scale, Rotate, Center to Origin, and
-  Drop to Build Plate previously acted on the whole scene instead of the
-  selected part — scaling or dropping one part after moving another moved
-  or resized both. Root-caused to Hole/Primitive booleans baking each
-  part's *world* transform into its geometry, which forced every part to
-  share one transform. Fixed by compositing Hole/Primitive features
-  entirely in each part's own stable local frame instead — Transform now
-  acts on exactly one part's own mesh, verified by scaling, rotating,
-  centering, and dropping one part of a two-part scene and confirming the
-  other's position stayed byte-for-byte identical.
-- The same local-frame fix also closed a latent Mirror bug: mirroring a
-  part that wasn't centered at the world origin (e.g. a second part
-  imported beside the first) would relocate it across the world origin
-  instead of flipping it in place. Verified by mirroring an off-center
-  part and confirming its bounding box stayed exactly where it was.
-- The full feature-layer lifecycle — add, reopen and edit, lock (and
-  confirm locked fields can't be changed), delete, and confirm the layer
-  list updates correctly — was verified end-to-end, along with local-origin
-  picking and numeric offset placement round-tripping correctly.
-- Plane Cut was re-verified to still produce two independently selectable,
-  movable parts after the rework.
+**From this pass (controls, Mate/Weld, Shapes, units, lock-to-plate):**
+- **Negative-number input** — typing a leading "-" (or a bare ".") into
+  any numeric field used to be immediately overwritten back to the old
+  value, because the field re-derived its display text from
+  `parseFloat()` on every keystroke. Fixed by only re-syncing a field's
+  displayed text from its committed value while the field is *not*
+  focused; verified by typing "-1" mid-keystroke and confirming the
+  minus sign survives, then completing "-12.5" and confirming it commits
+  correctly.
+- **Units conversion** — verified a 20mm cube reads exactly 0.787in after
+  switching units, and that typed values round-trip correctly in both
+  directions.
+- **Mate + Weld** — verified end-to-end: picking a face on each of two
+  parts, Fit (confirmed the parts stay separate, same part count),
+  and Weld (confirmed it merges them into exactly one part).
+- **Shapes toolbox** — verified each shape adds a correctly-labeled,
+  independent part, and that "split in half on create" produces two
+  separate `(upper)`/`(lower)` pieces.
+- **Lock to plate + left-click-drag** — verified that enabling it snaps
+  the part to Z=0, that left-click-dragging the part (no gizmo arrows
+  needed) moves its X/Y position, and that this same left-click-drag does
+  *nothing* on an unlocked part or empty space (no accidental orbit or
+  move).
+- **Orbit control change** — verified left-click-drag no longer rotates
+  the camera at all (pixel-identical before/after), middle-click-drag
+  still orbits, and right-click-drag still pans.
+- **Regression pass**: the full previous feature set (parts/layers,
+  mesh repair, Mirror, Plane Cut + Move, undo/redo, Hole feature edit/
+  lock/delete) was re-run end-to-end after all of the above changes with
+  no failures.
 
 **Everything was re-verified end-to-end** in a real browser, offline, with
 **zero console errors** across every test.
@@ -552,37 +700,39 @@ fixed**.
   reported, not fixed.
 - **Thread mesh triangle counts scale up fast.** A fine-pitch thread over
   a long depth can generate 10,000+ triangles.
-- **Scaling a part flattens its existing features.** Once you scale a
-  part, any holes/primitives already on it stop being independently
-  re-editable (they're folded into its base shape) — see §5. New features
-  added after that scale are unaffected.
-- **Plane Cut and Mirror don't preserve feature layers.** Both operate on
-  the part's current compiled shape and produce a new part/base with no
-  separately editable feature history, even if the original had some.
+- **Scaling a part flattens its existing features**, and **Plane Cut,
+  Mirror, and Weld don't preserve feature layers** either — all four
+  operate on the part's current compiled shape and produce a new base
+  with no separately editable feature history.
+- **Mate's "Flush Edge" is point-to-point, not true edge detection** —
+  it aligns two clicked reference points within the mated plane, which
+  works well for corners and straight edges on typical hardware shapes
+  but doesn't recognize curved or compound edges as a single entity.
 - **No feature reordering.** Features composite in the order you added
   them; there's no drag-to-reorder yet.
 - **Snap-to-grid applies to the Move tool only**, not to Hole/Primitive
-  click placement (snapping a raycast hit point to a grid could shift it
-  off the actual surface).
+  click placement.
 - **Single-level undo/redo stack**, capped at 25 steps.
 
 ---
 
-## 17. Possible future features
+## 20. Possible future features
 
 Most of what was on this list in earlier revisions of this manual is now
 built. What's still genuinely missing, for a future pass:
 
 1. **Hole-filling / non-manifold repair** — closing actual holes, not just
    fixing winding.
-2. **A true 3D transform gizmo** (drag arrows/rings in the viewport)
-   instead of numeric fields for Move and free rotation.
-3. **Feature reordering** — drag a layer up/down in the Parts panel to
+2. **A rotate/scale mode for the viewport gizmo**, alongside the current
+   translate-only drag handles.
+3. **True edge/face detection for Mate**, instead of point-and-normal
+   picking.
+4. **Feature reordering** — drag a layer up/down in the Parts panel to
    change the order features composite in.
-4. **Text/label embossing** onto a surface.
-5. **Per-vertex or sculpting-level editing** — StitchMesh is deliberately
+5. **Text/label embossing** onto a surface.
+6. **Per-vertex or sculpting-level editing** — StitchMesh is deliberately
    scoped to primitive-based modification, not freeform mesh editing.
-6. **Saved/named printer profiles** beyond the built-in list (custom
+7. **Saved/named printer profiles** beyond the built-in list (custom
    nozzle diameter, layer height).
 
 ---

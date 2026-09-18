@@ -605,9 +605,12 @@ export default function Viewport3D() {
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
-    // Middle-drag orbits (re-targeted to whatever's under the cursor at
-    // mousedown, below); left keeps its default rotate too, right still pans.
-    controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.PAN };
+    // Only middle-drag orbits (re-targeted to whatever's under the cursor
+    // at mousedown, below); right still pans. Left is deliberately left
+    // unbound here — it's reserved for tool click-to-place (Hole,
+    // Primitive, Mate, Measure, origin-pick) and for dragging a
+    // lock-to-plate part across the build plate (see onPointerDown/Move).
+    controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.PAN };
     controlsRef.current = controls;
 
     // Viewport drag handle for the selected part (Move tool only — see the
@@ -661,54 +664,56 @@ export default function Viewport3D() {
 
     scene.add(modelGroupRef.current);
 
-    // ---- orientation trihedron (bottom-left corner) --------------------
-    const makeAxisLabelSprite = (text: string, colorHex: string): THREE.Sprite => {
+    // ---- orientation trihedron: a rotating labeled cube (bottom-left) --
+    // Same idea as a PC-DMIS-style orientation cube: a static cube sits in
+    // its own mini scene, and the mini camera mirrors the main camera's
+    // rotation every frame (see renderGizmo below) — visually identical to
+    // the cube itself rotating with the view, but far simpler to keep in
+    // sync than re-deriving the cube's own orientation each frame.
+    const makeCubeFaceTexture = (label: string, bgHex: string, textHex: string, bold: boolean): THREE.CanvasTexture => {
       const canvas = document.createElement('canvas');
-      canvas.width = 64;
-      canvas.height = 64;
+      canvas.width = 128;
+      canvas.height = 128;
       const ctx = canvas.getContext('2d')!;
-      ctx.fillStyle = colorHex;
-      ctx.beginPath();
-      ctx.arc(32, 32, 27, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#0b0d12';
-      ctx.font = 'bold 38px system-ui, sans-serif';
+      ctx.fillStyle = bgHex;
+      ctx.fillRect(0, 0, 128, 128);
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(2, 2, 124, 124);
+      ctx.fillStyle = textHex;
+      ctx.font = `${bold ? 'bold ' : ''}${bold ? 54 : 32}px system-ui, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(text, 32, 35);
-      const texture = new THREE.CanvasTexture(canvas);
-      const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, depthWrite: false, sizeAttenuation: false });
-      const sprite = new THREE.Sprite(material);
-      sprite.scale.set(0.42, 0.42, 1);
-      return sprite;
+      ctx.fillText(label, 64, 68);
+      return new THREE.CanvasTexture(canvas);
     };
 
-    const makeGizmoAxis = (dir: THREE.Vector3, colorNum: number, colorHex: string, label: string): THREE.Group => {
-      const group = new THREE.Group();
-      const lineGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), dir.clone().multiplyScalar(0.55)]);
-      const line = new THREE.Line(lineGeom, new THREE.LineBasicMaterial({ color: colorNum }));
-      group.add(line);
+    const faceMaterial = (label: string, bgHex: string, textHex: string, bold: boolean) =>
+      new THREE.MeshBasicMaterial({ map: makeCubeFaceTexture(label, bgHex, textHex, bold) });
 
-      const coneGeom = new THREE.ConeGeometry(0.075, 0.2, 12);
-      const cone = new THREE.Mesh(coneGeom, new THREE.MeshBasicMaterial({ color: colorNum }));
-      cone.position.copy(dir.clone().multiplyScalar(0.62));
-      cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-      group.add(cone);
-
-      const sprite = makeAxisLabelSprite(label, colorHex);
-      sprite.position.copy(dir.clone().multiplyScalar(0.92));
-      group.add(sprite);
-      return group;
-    };
+    // BoxGeometry material order: +X, -X, +Y, -Y, +Z, -Z.
+    const cubeMaterials = [
+      faceMaterial('X', '#ef4444', '#0b0d12', true),
+      faceMaterial('-X', '#7f1d1d', '#e5e7eb', false),
+      faceMaterial('Y', '#22c55e', '#0b0d12', true),
+      faceMaterial('-Y', '#14532d', '#e5e7eb', false),
+      faceMaterial('Z', '#3b82f6', '#0b0d12', true),
+      faceMaterial('-Z', '#1e3a8a', '#e5e7eb', false),
+    ];
+    const cubeGeometry = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+    const gizmoCube = new THREE.Mesh(cubeGeometry, cubeMaterials);
+    const cubeEdges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(cubeGeometry),
+      new THREE.LineBasicMaterial({ color: 0x0b0d12 }),
+    );
+    gizmoCube.add(cubeEdges);
 
     const gizmoScene = new THREE.Scene();
     gizmoScene.background = new THREE.Color(0x1a1d26);
-    gizmoScene.add(makeGizmoAxis(new THREE.Vector3(1, 0, 0), 0xef4444, '#ef4444', 'X'));
-    gizmoScene.add(makeGizmoAxis(new THREE.Vector3(0, 1, 0), 0x22c55e, '#22c55e', 'Y'));
-    gizmoScene.add(makeGizmoAxis(new THREE.Vector3(0, 0, 1), 0x3b82f6, '#3b82f6', 'Z'));
+    gizmoScene.add(gizmoCube);
     gizmoSceneRef.current = gizmoScene;
 
-    const gizmoCamera = new THREE.OrthographicCamera(-1.05, 1.05, 1.05, -1.05, 0.1, 10);
+    const gizmoCamera = new THREE.OrthographicCamera(-1.5, 1.5, 1.5, -1.5, 0.1, 10);
     gizmoCameraRef.current = gizmoCamera;
 
     const GIZMO_SIZE = 108;
@@ -774,6 +779,43 @@ export default function Viewport3D() {
     };
     renderer.domElement.addEventListener('pointerdown', onMiddleClickRetarget, { capture: true });
 
+    // ---- left-click-drag: slide a lock-to-plate part across the build --
+    // plate directly (no need to grab the Move gizmo's arrows). Only
+    // engages for parts with lockToPlate on, where the drag is unambiguous
+    // (X/Y only, Z always stays pinned) — everything else needs the
+    // gizmo/numeric fields, since a screen-space drag can't otherwise tell
+    // which plane you mean to move a free part in.
+    const dragPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+    let draggingPartId: string | null = null;
+    let dragStartGround: THREE.Vector3 | null = null;
+    let dragStartPosition: THREE.Vector3 | null = null;
+    const dragScratch = new THREE.Vector3();
+
+    const beginPlateDrag = (event: PointerEvent): boolean => {
+      const tool = useAppStore.getState().activeTool;
+      if (event.button !== 0 || (tool !== 'select' && tool !== 'move')) return false;
+      if (transformControlsRef.current?.dragging) return false; // let the gizmo handle its own drag
+      const hit = getIntersection(event);
+      if (!hit) return false;
+      const partId = hit.object.userData.partId as string | undefined;
+      if (!partId) return false;
+      const part = useAppStore.getState().parts.find((p) => p.id === partId);
+      if (!part?.lockToPlate) return false;
+
+      const mesh = hit.object as THREE.Mesh;
+      const ground = new THREE.Vector3();
+      if (!raycasterRef.current.ray.intersectPlane(dragPlane, ground)) return false;
+
+      pushHistory();
+      draggingPartId = partId;
+      dragStartGround = ground;
+      dragStartPosition = mesh.position.clone();
+      useAppStore.getState().setSelectedPartId(partId);
+      updateSelectedPartPosition();
+      updateDimensions();
+      return true;
+    };
+
     const updateCutterPreview = (point: THREE.Vector3, normal: THREE.Vector3) => {
       const tool = useAppStore.getState().activeTool;
       const scene = sceneRef.current;
@@ -799,6 +841,25 @@ export default function Viewport3D() {
     };
 
     const onPointerMove = (event: PointerEvent) => {
+      if (draggingPartId && dragStartGround && dragStartPosition) {
+        const rect = renderer.domElement.getBoundingClientRect();
+        const ndc = new THREE.Vector2(
+          ((event.clientX - rect.left) / rect.width) * 2 - 1,
+          -((event.clientY - rect.top) / rect.height) * 2 + 1,
+        );
+        raycasterRef.current.setFromCamera(ndc, camera);
+        if (raycasterRef.current.ray.intersectPlane(dragPlane, dragScratch)) {
+          const mesh = getPartMeshes(draggingPartId)[0];
+          if (mesh) {
+            const delta = dragScratch.clone().sub(dragStartGround);
+            mesh.position.set(dragStartPosition.x + delta.x, dragStartPosition.y + delta.y, dragStartPosition.z);
+            updateDimensions();
+            updateSelectedPartPosition();
+          }
+        }
+        return;
+      }
+
       const tool = useAppStore.getState().activeTool;
       if (tool !== 'hole' && tool !== 'primitive') return;
       const placed = tool === 'hole' ? useAppStore.getState().hole.placed : useAppStore.getState().primitive.placed;
@@ -888,7 +949,10 @@ export default function Viewport3D() {
         return;
       }
 
-      if (tool !== 'hole' && tool !== 'primitive') return;
+      if (tool !== 'hole' && tool !== 'primitive') {
+        beginPlateDrag(event);
+        return;
+      }
       const hit = getIntersection(event);
       if (!hit || !hit.face) return;
 
@@ -899,8 +963,16 @@ export default function Viewport3D() {
       }
     };
 
+    const onPointerUp = () => {
+      draggingPartId = null;
+      dragStartGround = null;
+      dragStartPosition = null;
+    };
+
     renderer.domElement.addEventListener('pointermove', onPointerMove);
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
+    renderer.domElement.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointerup', onPointerUp);
 
     // ---- keyboard shortcuts --------------------------------------------
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1711,6 +1783,8 @@ export default function Viewport3D() {
       cancelAnimationFrame(frameId);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      renderer.domElement.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointerup', onPointerUp);
       renderer.domElement.removeEventListener('pointerdown', onMiddleClickRetarget, { capture: true });
       window.removeEventListener('keydown', onKeyDown);
       measureUnsub();
