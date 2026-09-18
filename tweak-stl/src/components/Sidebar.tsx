@@ -2,10 +2,12 @@ import { ChangeEvent, useEffect } from 'react';
 import {
   Circle,
   Cone,
+  Crosshair,
   Cylinder,
   Flame,
   FlipHorizontal2,
   Info,
+  Plus,
   Puzzle,
   Ruler,
   Scissors,
@@ -15,6 +17,7 @@ import {
   Torus as TorusIcon,
   Triangle,
   Box as BoxIcon,
+  X,
 } from 'lucide-react';
 import { useAppStore, type PlaneAxis, type PrimitiveOp, type PrimitiveShape, type ToolId, type BasicShape } from '@/state/useAppStore';
 import { THREAD_STANDARDS, THREAD_SYSTEM_LABELS, findThreadStandard, type ThreadSystem } from '@/utils/threadStandards';
@@ -706,6 +709,60 @@ function PlaneCutPanel() {
   );
 }
 
+/** How close two picked features' diameters need to be before Smart Fit offers to treat them as "the same size" (a pin into its hole). */
+const SMART_FIT_DIAMETER_TOLERANCE_MM = 0.3;
+
+function MateOffsetFields() {
+  const { mate, viewportActions } = useAppStore();
+  if (!mate.offsetUV) return null;
+  return (
+    <div className="space-y-1.5 border-t border-base-700 pt-3">
+      <div className="panel-label !mb-1">Offset (B relative to A)</div>
+      <p className="text-[11px] text-slate-500">
+        Exact position of B within the mated plane, relative to A's picked point. Type a value if you already know where B needs to land — no
+        need to eyeball a Flush Edge pick.
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        <NumberField label="U" value={mate.offsetUV[0]} onChange={(v) => viewportActions?.setMateOffsetU(v)} />
+        <NumberField label="V" value={mate.offsetUV[1]} onChange={(v) => viewportActions?.setMateOffsetV(v)} />
+      </div>
+    </div>
+  );
+}
+
+function MateBestFitPanel() {
+  const { mate, viewportActions } = useAppStore();
+  const totalPairs = 1 + mate.extraPairsA.length; // the initial A/B anchor pick always counts as pair #1
+  const canCompute = totalPairs >= 3;
+  return (
+    <div className="space-y-1.5 border-t border-base-700 pt-3">
+      <div className="panel-label !mb-1">Best Fit (multipoint)</div>
+      <p className="text-[11px] text-slate-500">
+        For a mating surface a single flat face can't fully pin down (stepped, irregular, or off-center): pick 3 or more matching point pairs on A
+        and B, then compute the rotation + position that best lines them all up at once.
+      </p>
+      <p className="text-xs text-slate-400">
+        {totalPairs} point pair{totalPairs === 1 ? '' : 's'} picked{canCompute ? '' : ` — need ${3 - totalPairs} more`}.
+      </p>
+      <div className="flex gap-2">
+        <button className="btn flex-1" onClick={() => viewportActions?.beginPairPick()}>
+          <Plus className="mr-1 inline h-3.5 w-3.5" />
+          Add Point Pair
+        </button>
+        {mate.extraPairsA.length > 0 && (
+          <button className="btn-icon" title="Remove last pair" onClick={() => viewportActions?.removeLastPair()}>
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      <button className="btn-primary w-full" disabled={!canCompute} onClick={() => viewportActions?.applyBestFit()}>
+        <Crosshair className="mr-1 inline h-3.5 w-3.5" />
+        Compute Best Fit
+      </button>
+    </div>
+  );
+}
+
 function MatePanel() {
   const { hasModel, parts, mate, viewportActions } = useAppStore();
 
@@ -727,29 +784,55 @@ function MatePanel() {
   }
 
   const labelOf = (partId: string | undefined) => parts.find((p) => p.id === partId)?.label ?? '…';
+  const axisTag = (anchor: typeof mate.a) =>
+    anchor?.isAxis ? <span className="ml-1 text-accent-400">(⌀{anchor.diameterMM?.toFixed(2)}mm axis)</span> : null;
+
+  const canSmartFit =
+    !!mate.a?.isAxis && !!mate.b?.isAxis && Math.abs((mate.a.diameterMM ?? 0) - (mate.b.diameterMM ?? 0)) <= SMART_FIT_DIAMETER_TOLERANCE_MM;
 
   return (
     <div className="panel-section space-y-3">
       <div className="panel-label">Mate</div>
 
-      {mate.stage === 'pickA' && <p className="text-sm text-slate-400">Click a face on the FIRST (stationary) part.</p>}
+      {mate.stage === 'pickA' && (
+        <p className="text-sm text-slate-400">
+          Click a face on the FIRST (stationary) part — or click near a hole or round boss to snap to its own axis instead.
+        </p>
+      )}
       {mate.stage === 'pickB' && (
         <>
-          <p className="text-xs text-slate-500">Part A: {labelOf(mate.a?.partId)}</p>
-          <p className="text-sm text-slate-400">Now click a face on the SECOND part to mate to it.</p>
+          <p className="text-xs text-slate-500">
+            Part A: {labelOf(mate.a?.partId)}
+            {axisTag(mate.a)}
+          </p>
+          <p className="text-sm text-slate-400">Now click a face (or a hole/boss) on the SECOND part to mate to it.</p>
         </>
       )}
       {mate.stage === 'ready' && (
         <>
           <p className="text-xs text-slate-500">
-            Part A: {labelOf(mate.a?.partId)} · Part B: {labelOf(mate.b?.partId)}
+            Part A: {labelOf(mate.a?.partId)}
+            {axisTag(mate.a)} · Part B: {labelOf(mate.b?.partId)}
+            {axisTag(mate.b)}
           </p>
           <p className="text-sm text-slate-400">
             {mate.fitted ? 'Fitted — B is now flush against A, facing it.' : 'Click Fit to rotate and slide B flush against A, facing it.'}
           </p>
+          {canSmartFit && (
+            <div className="rounded-md border border-accent-600/40 bg-accent-500/10 p-2">
+              <p className="mb-1.5 text-xs text-accent-300">
+                Both picks are ⌀{mate.a?.diameterMM?.toFixed(2)}mm / ⌀{mate.b?.diameterMM?.toFixed(2)}mm hole/boss axes — close enough to treat as
+                the same size.
+              </p>
+              <button className="btn-primary w-full" onClick={() => viewportActions?.applyAxisFit()}>
+                <Crosshair className="mr-1 inline h-3.5 w-3.5" />
+                Smart Fit (make coaxial)
+              </button>
+            </div>
+          )}
           <div className="flex gap-2">
             <button className="btn-primary flex-1" onClick={() => viewportActions?.applyMateFit()}>
-              {mate.fitted ? 'Re-fit' : 'Fit'}
+              {mate.fitted ? 'Re-fit' : 'Fit (flush faces)'}
             </button>
             <button className="btn" onClick={() => viewportActions?.cancelMate()}>
               Start Over
@@ -757,24 +840,30 @@ function MatePanel() {
           </div>
 
           {mate.fitted && (
-            <div className="space-y-2 border-t border-base-700 pt-3">
-              <div className="panel-label !mb-1">Flush Edge (optional)</div>
-              <p className="text-[11px] text-slate-500">
-                Click a reference point near an edge/corner on each part, then Align Edge — slides B within the mated plane so the two points line
-                up.
-              </p>
-              <button
-                className="btn w-full"
-                onClick={() => useAppStore.getState().setMate({ stage: 'pickEdgeA', edgeA: null, edgeB: null })}
-              >
-                Pick Edge Points
-              </button>
-              <div className="flex gap-2">
-                <button className="btn-primary flex-1" onClick={() => viewportActions?.weldMatedParts()}>
-                  <Flame className="mr-1 inline h-3.5 w-3.5" />
-                  Weld
+            <>
+              <MateOffsetFields />
+              <div className="space-y-2 border-t border-base-700 pt-3">
+                <div className="panel-label !mb-1">Flush Edge (optional)</div>
+                <p className="text-[11px] text-slate-500">
+                  Click a reference point near an edge/corner on each part, then Align Edge — slides B within the mated plane so the two points
+                  line up.
+                </p>
+                <button
+                  className="btn w-full"
+                  onClick={() => useAppStore.getState().setMate({ stage: 'pickEdgeA', edgeA: null, edgeB: null })}
+                >
+                  Pick Edge Points
                 </button>
               </div>
+            </>
+          )}
+          <MateBestFitPanel />
+          {mate.fitted && (
+            <div className="space-y-2 border-t border-base-700 pt-3">
+              <button className="btn-primary w-full" onClick={() => viewportActions?.weldMatedParts()}>
+                <Flame className="mr-1 inline h-3.5 w-3.5" />
+                Weld
+              </button>
               <p className="text-[11px] text-slate-500">
                 Weld permanently merges A and B into one part (a real boolean union) — they can no longer be moved independently afterward.
               </p>
@@ -805,6 +894,18 @@ function MatePanel() {
               Cancel
             </button>
           </div>
+        </>
+      )}
+      {(mate.stage === 'pickPairA' || mate.stage === 'pickPairB') && (
+        <>
+          <p className="text-sm text-slate-400">
+            {mate.stage === 'pickPairA'
+              ? `Click a point pair, starting on Part A (${labelOf(mate.a?.partId)}) — a hole/boss click snaps to its center.`
+              : `Now click the matching point on Part B (${labelOf(mate.b?.partId)}).`}
+          </p>
+          <button className="btn w-full" onClick={() => useAppStore.getState().setMate({ stage: 'ready' })}>
+            Cancel
+          </button>
         </>
       )}
 

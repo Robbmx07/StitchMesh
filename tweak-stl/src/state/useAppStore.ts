@@ -78,14 +78,18 @@ export interface MeasureToolState {
   point: [number, number, number] | null;
 }
 
-/** One click-picked face reference on a part, used by the Mate tool. */
+/** One click-picked reference on a part, used by the Mate tool. */
 export interface MateAnchor {
   partId: string;
   point: [number, number, number];
   normal: [number, number, number];
+  /** True when this pick snapped to a recognized cylindrical hole/boss feature's own axis (point = feature's surface center, normal = its axis direction) rather than the raw clicked surface point/local-face-normal. */
+  isAxis?: boolean;
+  /** That feature's diameter — set only when isAxis is true. Used to offer Smart Fit when A's and B's diameters match closely. */
+  diameterMM?: number;
 }
 
-export type MateStage = 'pickA' | 'pickB' | 'ready' | 'pickEdgeA' | 'pickEdgeB' | 'edgeReady';
+export type MateStage = 'pickA' | 'pickB' | 'ready' | 'pickEdgeA' | 'pickEdgeB' | 'edgeReady' | 'pickPairA' | 'pickPairB';
 
 export interface MateToolState {
   stage: MateStage;
@@ -94,6 +98,23 @@ export interface MateToolState {
   fitted: boolean;
   edgeA: [number, number, number] | null;
   edgeB: [number, number, number] | null;
+  /**
+   * Extra corresponding point pairs for multipoint Best Fit, in addition to
+   * the initial a/b anchor points (which always count as pair #1) — local
+   * frame, part A's and part B's own. 3+ total pairs (so 2+ here) lets
+   * applyBestFit() solve the full rotation+translation from points alone,
+   * for mating surfaces a single face-normal can't fully constrain (e.g. a
+   * stepped or irregular contact face).
+   */
+  extraPairsA: [number, number, number][];
+  extraPairsB: [number, number, number][];
+  /**
+   * Current in-plane offset between A's and B's anchor points, resolved
+   * into a stable (U, V) basis derived from A's mate normal — null outside
+   * a fitted mate. Lets the Mate panel show and accept an exact typed
+   * offset instead of only a click-based Flush Edge gesture.
+   */
+  offsetUV: [number, number] | null;
 }
 
 export interface ShapeToolState {
@@ -228,6 +249,17 @@ export interface ViewportActions {
   applyFlushEdge: () => void;
   /** Real CSG union of the two mated parts into a single merged part. */
   weldMatedParts: () => void;
+  /** Sets B's in-plane offset from A (along the stable U or V basis derived from A's mate normal) to an exact typed value. */
+  setMateOffsetU: (mm: number) => void;
+  setMateOffsetV: (mm: number) => void;
+  /** Starts (or continues) picking an additional corresponding point pair for multipoint Best Fit. */
+  beginPairPick: () => void;
+  /** Removes the most recently added extra point pair. */
+  removeLastPair: () => void;
+  /** Rotation+translation least-squares best fit (Kabsch) of B onto A from all picked point pairs (needs 3+ total). */
+  applyBestFit: () => void;
+  /** Coaxially aligns B's axis to A's, for two anchors that both snapped to a cylindrical hole/boss feature — see MateAnchor.isAxis. */
+  applyAxisFit: () => void;
 }
 
 interface AppState {
@@ -381,6 +413,9 @@ const defaultMate: MateToolState = {
   fitted: false,
   edgeA: null,
   edgeB: null,
+  extraPairsA: [],
+  extraPairsB: [],
+  offsetUV: null,
 };
 
 const defaultShapeTool: ShapeToolState = {

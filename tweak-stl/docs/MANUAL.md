@@ -396,17 +396,17 @@ panel — ready to be moved, mated, or modified separately.*
 
 ## 11. Mate & Weld
 
-Tab: **Mate**. "Smart-fits" two parts flush against each other — a face on
-one part is rotated and slid until it touches a face on the other,
-facing it — while keeping them as two separate, independently movable
-parts. **Weld** then permanently merges them, if you want that.
+Tab: **Mate**. Positions one part against another — flush against a face,
+coaxial with a hole/boss, or matched across several reference points —
+while keeping them as two separate, independently movable parts. **Weld**
+then permanently merges them, if you want that.
 
-**Workflow**:
+**Basic workflow**:
 
 1. Click **Mate** → click a face on the **first (stationary)** part.
 2. Click a face on the **second** part — the one that will move.
-3. Click **Fit** — StitchMesh rotates and slides the second part so that
-   face sits flush against the first, facing it.
+3. Click **Fit (flush faces)** — StitchMesh rotates and slides the second
+   part so that face sits flush against the first, facing it.
 
 ![Ready to pick the second part's face](manual-assets/12a-mate-pick-second.png)
 
@@ -419,24 +419,90 @@ part to mate it to.*
 in the Parts panel. **Re-fit** repeats the fit if you've moved something;
 **Start Over** clears the picks and starts again.*
 
-- **Flush Edge (optional)** — once fitted, click **Pick Edge Points**,
-  then click a reference point near an edge or corner on each part.
-  **Align Edge** then slides the second part *within* the mated plane
-  (the flush contact from Fit is preserved) so those two points line up —
-  useful for centering a boss on a face or aligning a corner exactly.
-  This is a point-to-point alignment, not true edge detection, so pick
-  points as close to the actual edge/corner you mean as you can.
-- **Weld** — a real boolean union that permanently merges the two mated
-  parts into one. They can no longer be moved independently afterward,
-  and neither part's prior feature layers (§6) carry over as separately
-  editable on the merged result.
-
 Because StitchMesh works on triangle meshes rather than true CAD faces, a
 "face" here means whatever flat surface you click, and "flush" means the
 two clicked surfaces' planes touch with their normals pointing at each
 other — it works well for flat faces on blocks, bosses, and similar
 shapes, and won't recognize curved or compound surfaces as a single face
 the way a parametric CAD face would.
+
+### Axis snap: picking a hole or boss instead of a flat face
+
+Click near a **Hole** feature or a round **Modify** primitive (cylinder or
+washer) instead of a flat spot, and the pick snaps to that feature's own
+centerline — its stored surface point and true axis direction — rather
+than whatever raw point you happened to click on its curved wall. The
+picked anchor shows a short dashed line through it in the viewport (its
+axis) and the Mate panel tags it with its diameter, e.g. "6.00mm axis"
+(shown with the diameter symbol in the app itself).
+This is what makes coaxial fits (below) both possible and precise: a click
+anywhere on a hole's rim reliably means "this hole's axis," not "this
+one triangle on its wall."
+
+![Axis-snapped picks on a hole and a matching boss](manual-assets/12c-mate-axis-snap.png)
+
+*A 6mm hole (purple marker + dashed axis line) and a 6mm boss (orange) —
+both picks snapped to their true centerlines, and the panel recognizes
+the matching diameters.*
+
+### Smart Fit — coaxial (pin into a matching hole)
+
+When **both** picks snap to a hole/boss axis **and** their diameters are
+close enough to treat as the same size (within 0.3mm), the panel offers a
+highlighted **Smart Fit (make coaxial)** button in place of (alongside)
+the regular Fit. It rotates and slides the second part so its axis becomes
+coincident with the first's — a boss/pin lines up straight into its
+matching hole — while leaving how far it's inserted along that axis
+exactly where it already was, since that's a real choice, not something
+to silently reset. Adjust the insertion depth afterward with a normal
+drag, the Position field, or Snap to Grid.
+
+This is deliberately conservative: it only fires on an explicit click of
+a clearly-labeled button, and only when both anchors are genuine axis
+picks with genuinely close diameters — it won't guess at a fit from
+flat-face picks or mismatched sizes, and nothing about it is automatic
+or silent.
+
+![Boss now coaxial with the hole after Smart Fit](manual-assets/12d-mate-smartfit-coaxial.png)
+
+*After Smart Fit: the boss sits inside the hole, both markers now
+coincide, and the offset shows U=0/V=0 — exactly coaxial.*
+
+### Offset (B relative to A) — type an exact position
+
+Once fitted (by any method below), the panel shows **U** and **V** fields
+— B's current position relative to A's picked point, resolved into a
+fixed pair of in-plane directions. If you already know exactly where B
+needs to land (a hole's exact offset from an edge, say), type it directly
+instead of eyeballing a drag or a Flush Edge pick — the part moves live as
+you type, within the mated plane only (it never breaks flush contact).
+
+- **Flush Edge (optional)** — the click-based alternative: click **Pick
+  Edge Points**, then a reference point near an edge or corner on each
+  part. **Align Edge** slides B within the mated plane so those two points
+  line up — useful when you want to match a physical edge visually rather
+  than type a number. This is a point-to-point alignment, not true edge
+  detection, so pick points as close to the actual edge/corner as you can.
+
+### Best Fit (multipoint)
+
+For a mating surface a single flat face or axis can't fully pin down —
+stepped, irregular, or where the surfaces are only approximately flat —
+pick **3 or more** corresponding point pairs on A and B (the initial pick
+from step 1–2 above always counts as pair #1; **Add Point Pair** walks you
+through picking more, on A then the matching point on B). **Compute Best
+Fit** then solves the single rotation + position that best lines up *all*
+the picked pairs at once (a least-squares rigid fit — the Kabsch
+algorithm), rather than reasoning from a single face normal. A pick near a
+hole/boss still snaps to its axis point the same way, so "the center of
+this hole on both parts" is an easy, precise pair to add. **Remove last
+pair** undoes the most recent pick if you want to redo it.
+
+- **Weld** — a real boolean union that permanently merges the two mated
+  parts into one, however they were positioned (Fit, Smart Fit, Best Fit,
+  or a manual offset). They can no longer be moved independently
+  afterward, and neither part's prior feature layers (§6) carry over as
+  separately editable on the merged result.
 
 ---
 

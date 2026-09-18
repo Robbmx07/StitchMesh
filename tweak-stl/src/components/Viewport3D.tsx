@@ -18,6 +18,7 @@ import { createBasicShapeGeometry, BASIC_SHAPE_LABELS } from '@/utils/shapeGeome
 import { findThreadStandard } from '@/utils/threadStandards';
 import { findPrinterProfile, recommendedThreadResolution, effectivePrinterProfile, buildVolumeWarning as computeBuildVolumeWarning } from '@/utils/printerProfiles';
 import { validateGeometry, repairWindingConsistency, mirrorGeometry, hasRepairableIssues, hasUnrepairableIssues } from '@/utils/meshRepair';
+import { kabschFit, type Vec3 } from '@/utils/rigidFit';
 import {
   useAppStore,
   type OrthoView,
@@ -46,8 +47,73 @@ function toTuple3(v: THREE.Vector3): [number, number, number] {
   return [v.x, v.y, v.z];
 }
 
+/** Deterministic orthonormal (U, V) basis perpendicular to `normal` — the same two axes every time for a given normal, so a Mate offset typed as "U=5" means the same physical direction before and after re-fitting. */
+function planeBasisFromNormal(normal: THREE.Vector3): [THREE.Vector3, THREE.Vector3] {
+  const n = normal.clone().normalize();
+  const arbitrary = Math.abs(n.y) < 0.99 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+  const u = new THREE.Vector3().crossVectors(arbitrary, n).normalize();
+  const v = new THREE.Vector3().crossVectors(n, u).normalize();
+  return [u, v];
+}
+
 function cloneFeature(f: PartFeature): PartFeature {
   return { ...f, point: [...f.point] as [number, number, number], normal: [...f.normal] as [number, number, number] };
+}
+
+/** A hole cuts a cylindrical bore; only 'cylinder' and 'washer' primitives are round (a box isn't). */
+function isCylindricalFeature(f: PartFeature): boolean {
+  return f.type === 'hole' || (f.type === 'primitive' && (f.shape === 'cylinder' || f.shape === 'washer'));
+}
+
+const CYLINDER_SNAP_TOLERANCE_MM = 1.5;
+
+/**
+ * If `localPoint` (already converted into the part's own local frame) lies
+ * near a hole/cylinder/washer feature's cylindrical wall, returns that
+ * feature's true axis (its stored surface point + extrusion direction) and
+ * effective diameter — so a Mate pick can snap to "the middle of this
+ * hole/pin", not an arbitrary point on its wall, and a coaxial Smart Fit
+ * has a diameter to compare. A washer picks whichever of its two walls
+ * (inner bore vs outer rim) the click landed closer to. Returns null when
+ * the point isn't close enough to any cylindrical feature.
+ */
+function findCylindricalFeatureNear(
+  features: PartFeature[],
+  localPoint: THREE.Vector3,
+): { point: THREE.Vector3; normal: THREE.Vector3; diameterMM: number } | null {
+  let best: { distToWall: number; point: THREE.Vector3; normal: THREE.Vector3; diameterMM: number } | null = null;
+
+  for (const f of features) {
+    if (f.visible === false || !isCylindricalFeature(f)) continue;
+    const axisPoint = new THREE.Vector3(...f.point);
+    const axisDir = new THREE.Vector3(...f.normal).normalize();
+    const length = f.type === 'hole' ? f.depth : f.height;
+    // Holes cut INTO the material (negative along normal from the surface
+    // point); primitives extrude OUTWARD (positive) — see positionCutterAtSurface.
+    const axisSign = f.type === 'hole' ? -1 : 1;
+    const margin = 0.75; // a little slack past either end of the feature's own length
+
+    const toPoint = localPoint.clone().sub(axisPoint);
+    const alongAxis = toPoint.dot(axisDir);
+    const withinAxialRange =
+      axisSign < 0 ? alongAxis <= margin && alongAxis >= -length - margin : alongAxis >= -margin && alongAxis <= length + margin;
+    if (!withinAxialRange) continue;
+
+    const radialVec = toPoint.clone().sub(axisDir.clone().multiplyScalar(alongAxis));
+    const radialDist = radialVec.length();
+
+    const walls: number[] = [f.diameter];
+    if (f.type === 'primitive' && f.shape === 'washer') walls.push(f.innerDiameter);
+    for (const wallDiameter of walls) {
+      const distToWall = Math.abs(radialDist - wallDiameter / 2);
+      if (distToWall > CYLINDER_SNAP_TOLERANCE_MM) continue;
+      if (!best || distToWall < best.distToWall) {
+        best = { distToWall, point: axisPoint.clone(), normal: axisDir.clone(), diameterMM: wallDiameter };
+      }
+    }
+  }
+
+  return best ? { point: best.point, normal: best.normal, diameterMM: best.diameterMM } : null;
 }
 
 let partIdCounter = 0;
@@ -216,6 +282,7 @@ export default function Viewport3D() {
         boxHelperRef.current = null;
       }
       updateBuildVolumeWarning();
+      refreshMateOffsetDisplay();
       return;
     }
     const box = new THREE.Box3().setFromObject(mesh);
@@ -232,6 +299,7 @@ export default function Viewport3D() {
       boxHelperRef.current = helper;
     }
     updateBuildVolumeWarning();
+    refreshMateOffsetDisplay();
   };
 
   const updateParts = () => {
@@ -330,17 +398,38 @@ export default function Viewport3D() {
     });
   };
 
-  const showMateMarker = (which: 'a' | 'b', point: THREE.Vector3) => {
+  /** `axisDirection` given (a snapped hole/boss pick) also draws a short centerline through the marker — the "you picked this feature's axis, not just a surface point" cue. */
+  const showMateMarker = (which: 'a' | 'b', point: THREE.Vector3, axisDirection?: THREE.Vector3) => {
     const scene = sceneRef.current;
     if (!scene) return;
     const ref = which === 'a' ? mateMarkerARef : mateMarkerBRef;
     if (ref.current) scene.remove(ref.current);
     const color = which === 'a' ? 0x8b5cf6 : 0xf59e0b;
+    const group = new THREE.Group();
     const marker = new THREE.Mesh(new THREE.SphereGeometry(1.4, 16, 16), new THREE.MeshBasicMaterial({ color, depthTest: false }));
     marker.position.copy(point);
     marker.renderOrder = 999;
-    scene.add(marker);
-    ref.current = marker;
+    group.add(marker);
+    if (axisDirection) {
+      const half = axisDirection.clone().normalize().multiplyScalar(9);
+      const lineGeom = new THREE.BufferGeometry().setFromPoints([point.clone().sub(half), point.clone().add(half)]);
+      const line = new THREE.Line(lineGeom, new THREE.LineDashedMaterial({ color, dashSize: 2, gapSize: 1, depthTest: false }));
+      line.computeLineDistances();
+      line.renderOrder = 998;
+      group.add(line);
+    }
+    scene.add(group);
+    ref.current = group;
+  };
+
+  /** Redraws both mate markers at their anchors' CURRENT world position — call after any fit/offset action that moves part B, so the markers keep showing where the two anchors actually are instead of going stale at their pre-fit spot. */
+  const refreshMateMarkers = () => {
+    const { a, b } = useAppStore.getState().mate;
+    if (!a || !b) return;
+    const meshA = getPartMeshes(a.partId)[0];
+    const meshB = getPartMeshes(b.partId)[0];
+    if (meshA) showMateMarker('a', toWorldPoint(meshA, new THREE.Vector3(...a.point)), a.isAxis ? toWorldNormal(meshA, new THREE.Vector3(...a.normal)) : undefined);
+    if (meshB) showMateMarker('b', toWorldPoint(meshB, new THREE.Vector3(...b.point)), b.isAxis ? toWorldNormal(meshB, new THREE.Vector3(...b.normal)) : undefined);
   };
 
   const computeCenterOffset = (mesh: THREE.Mesh, worldPoint: THREE.Vector3): [number, number, number] => {
@@ -444,6 +533,25 @@ export default function Viewport3D() {
         maxZ: box.max.z,
       }),
     );
+  };
+
+  /** Recomputes the Mate panel's live "offset B from A" (U, V) readout from actual mesh positions — called any time a part's transform could have changed while a mate is active. */
+  const refreshMateOffsetDisplay = () => {
+    const { a, b, stage, offsetUV } = useAppStore.getState().mate;
+    const active = !!a && !!b && (stage === 'ready' || stage === 'edgeReady');
+    if (!active) {
+      if (offsetUV !== null) useAppStore.getState().setMate({ offsetUV: null });
+      return;
+    }
+    const meshA = getPartMeshes(a!.partId)[0];
+    const meshB = getPartMeshes(b!.partId)[0];
+    if (!meshA || !meshB) return;
+    const worldNormalA = toWorldNormal(meshA, new THREE.Vector3(...a!.normal));
+    const [uAxis, vAxis] = planeBasisFromNormal(worldNormalA);
+    const worldPointA = toWorldPoint(meshA, new THREE.Vector3(...a!.point));
+    const worldPointB = toWorldPoint(meshB, new THREE.Vector3(...b!.point));
+    const delta = worldPointB.clone().sub(worldPointA);
+    useAppStore.getState().setMate({ offsetUV: [delta.dot(uAxis), delta.dot(vAxis)] });
   };
 
   const maybeSnap = (value: number): number => {
@@ -1053,24 +1161,42 @@ export default function Viewport3D() {
         const mesh = hit.object as THREE.Mesh;
         const worldNormal = hit.face.normal.clone().transformDirection(mesh.matrixWorld).normalize();
         const state = useAppStore.getState().mate;
+        const localPoint = toLocalPoint(mesh, hit.point);
+        const meta = getPartMeta(partId);
+        const cylSnap = meta ? findCylindricalFeatureNear(meta.features, localPoint) : null;
+
+        const makeAnchor = (): MateAnchor =>
+          cylSnap
+            ? { partId, point: toTuple3(cylSnap.point), normal: toTuple3(cylSnap.normal), isAxis: true, diameterMM: cylSnap.diameterMM }
+            : { partId, point: toTuple3(localPoint), normal: toTuple3(toLocalNormal(mesh, worldNormal)) };
+
+        const markerAxis = cylSnap ? toWorldNormal(mesh, cylSnap.normal) : undefined;
 
         if (state.stage === 'pickA') {
-          const anchor: MateAnchor = { partId, point: toTuple3(toLocalPoint(mesh, hit.point)), normal: toTuple3(toLocalNormal(mesh, worldNormal)) };
-          useAppStore.getState().setMate({ a: anchor, stage: 'pickB' });
-          showMateMarker('a', hit.point);
+          useAppStore.getState().setMate({ a: makeAnchor(), stage: 'pickB' });
+          showMateMarker('a', cylSnap ? toWorldPoint(mesh, cylSnap.point) : hit.point, markerAxis);
         } else if (state.stage === 'pickB') {
           if (partId === state.a?.partId) return; // must mate to a different part
-          const anchor: MateAnchor = { partId, point: toTuple3(toLocalPoint(mesh, hit.point)), normal: toTuple3(toLocalNormal(mesh, worldNormal)) };
-          useAppStore.getState().setMate({ b: anchor, stage: 'ready' });
-          showMateMarker('b', hit.point);
+          useAppStore.getState().setMate({ b: makeAnchor(), stage: 'ready' });
+          showMateMarker('b', cylSnap ? toWorldPoint(mesh, cylSnap.point) : hit.point, markerAxis);
         } else if (state.stage === 'pickEdgeA') {
           if (partId !== state.a?.partId) return;
-          useAppStore.getState().setMate({ edgeA: toTuple3(toLocalPoint(mesh, hit.point)), stage: 'pickEdgeB' });
+          useAppStore.getState().setMate({ edgeA: toTuple3(localPoint), stage: 'pickEdgeB' });
           showMateMarker('a', hit.point);
         } else if (state.stage === 'pickEdgeB') {
           if (partId !== state.b?.partId) return;
-          useAppStore.getState().setMate({ edgeB: toTuple3(toLocalPoint(mesh, hit.point)), stage: 'edgeReady' });
+          useAppStore.getState().setMate({ edgeB: toTuple3(localPoint), stage: 'edgeReady' });
           showMateMarker('b', hit.point);
+        } else if (state.stage === 'pickPairA') {
+          if (partId !== state.a?.partId) return;
+          const pairPoint = cylSnap ? cylSnap.point : localPoint;
+          useAppStore.getState().setMate({ extraPairsA: [...state.extraPairsA, toTuple3(pairPoint)], stage: 'pickPairB' });
+          showMateMarker('a', cylSnap ? toWorldPoint(mesh, cylSnap.point) : hit.point, markerAxis);
+        } else if (state.stage === 'pickPairB') {
+          if (partId !== state.b?.partId) return;
+          const pairPoint = cylSnap ? cylSnap.point : localPoint;
+          useAppStore.getState().setMate({ extraPairsB: [...state.extraPairsB, toTuple3(pairPoint)], stage: 'ready' });
+          showMateMarker('b', cylSnap ? toWorldPoint(mesh, cylSnap.point) : hit.point, markerAxis);
         }
         return;
       }
@@ -1927,6 +2053,7 @@ export default function Viewport3D() {
 
         updateDimensions();
         updateSelectedPartPosition();
+        refreshMateMarkers();
         useAppStore.getState().setMate({ fitted: true });
       },
 
@@ -1953,6 +2080,139 @@ export default function Viewport3D() {
         updateSelectedPartPosition();
         clearMateMarkers();
         useAppStore.getState().setMate({ stage: 'ready', edgeA: null, edgeB: null });
+      },
+
+      setMateOffsetU: (mm) => {
+        const { a, b, offsetUV } = useAppStore.getState().mate;
+        if (!a || !b || !offsetUV) return;
+        const meshA = getPartMeshes(a.partId)[0];
+        const meshB = getPartMeshes(b.partId)[0];
+        if (!meshA || !meshB) return;
+        pushHistoryCoalesced('mate-offset-u');
+        const worldNormalA = toWorldNormal(meshA, new THREE.Vector3(...a.normal));
+        const [uAxis] = planeBasisFromNormal(worldNormalA);
+        meshB.position.addScaledVector(uAxis, mm - offsetUV[0]);
+        meshB.updateMatrixWorld(true);
+        updateDimensions();
+        updateSelectedPartPosition();
+        refreshMateMarkers();
+      },
+
+      setMateOffsetV: (mm) => {
+        const { a, b, offsetUV } = useAppStore.getState().mate;
+        if (!a || !b || !offsetUV) return;
+        const meshA = getPartMeshes(a.partId)[0];
+        const meshB = getPartMeshes(b.partId)[0];
+        if (!meshA || !meshB) return;
+        pushHistoryCoalesced('mate-offset-v');
+        const worldNormalA = toWorldNormal(meshA, new THREE.Vector3(...a.normal));
+        const [, vAxis] = planeBasisFromNormal(worldNormalA);
+        meshB.position.addScaledVector(vAxis, mm - offsetUV[1]);
+        meshB.updateMatrixWorld(true);
+        updateDimensions();
+        updateSelectedPartPosition();
+        refreshMateMarkers();
+      },
+
+      beginPairPick: () => {
+        const { a, b } = useAppStore.getState().mate;
+        if (!a || !b) return;
+        useAppStore.getState().setMate({ stage: 'pickPairA' });
+      },
+
+      removeLastPair: () => {
+        const { extraPairsA, extraPairsB } = useAppStore.getState().mate;
+        useAppStore.getState().setMate({ extraPairsA: extraPairsA.slice(0, -1), extraPairsB: extraPairsB.slice(0, -1) });
+      },
+
+      applyBestFit: () => {
+        const { a, b, extraPairsA, extraPairsB } = useAppStore.getState().mate;
+        if (!a || !b) return;
+        const meshA = getPartMeshes(a.partId)[0];
+        const meshB = getPartMeshes(b.partId)[0];
+        if (!meshA || !meshB) return;
+        // The initial anchor pick always counts as pair #1; extraPairsA/B add more.
+        const pairsA = [a.point, ...extraPairsA];
+        const pairsB = [b.point, ...extraPairsB];
+        if (pairsA.length < 3) return; // need 3+ total to solve a full rigid transform from points alone
+
+        // Kabsch solves in one shared space — bring both parts' LOCAL pick
+        // points into A's CURRENT world frame (not B's, since B is the one
+        // about to move) before fitting.
+        const worldPairsA: Vec3[] = pairsA.map((p) => toWorldPoint(meshA, new THREE.Vector3(...p)).toArray() as Vec3);
+        const worldPairsB: Vec3[] = pairsB.map((p) => toWorldPoint(meshB, new THREE.Vector3(...p)).toArray() as Vec3);
+
+        const fit = kabschFit(worldPairsA, worldPairsB);
+        if (!fit) return; // collinear pick points — rotation genuinely underdetermined, refuse rather than guess
+
+        pushHistory();
+
+        const rotMatrix = new THREE.Matrix4().set(
+          fit.rotation[0][0], fit.rotation[0][1], fit.rotation[0][2], 0,
+          fit.rotation[1][0], fit.rotation[1][1], fit.rotation[1][2], 0,
+          fit.rotation[2][0], fit.rotation[2][1], fit.rotation[2][2], 0,
+          0, 0, 0, 1,
+        );
+        const rotQuat = new THREE.Quaternion().setFromRotationMatrix(rotMatrix);
+
+        // kabschFit solved for the rigid transform that maps B's CURRENT
+        // world-space pick points onto A's — i.e. an additional transform
+        // to apply on top of B's existing world matrix (new_world_point =
+        // R*old_world_point + t), not a replacement for it. Composing it
+        // that way (rather than overwriting position/quaternion outright)
+        // is what keeps B's existing scale intact.
+        meshB.updateMatrixWorld(true);
+        const fitMatrix = new THREE.Matrix4().compose(
+          new THREE.Vector3(...fit.translation),
+          rotQuat,
+          new THREE.Vector3(1, 1, 1),
+        );
+        const newMatrix = fitMatrix.multiply(meshB.matrix);
+        newMatrix.decompose(meshB.position, meshB.quaternion, meshB.scale);
+        meshB.updateMatrixWorld(true);
+
+        updateDimensions();
+        updateSelectedPartPosition();
+        refreshMateMarkers();
+        useAppStore.getState().setMate({ fitted: true, stage: 'ready' });
+      },
+
+      applyAxisFit: () => {
+        const { a, b } = useAppStore.getState().mate;
+        if (!a || !b || !a.isAxis || !b.isAxis) return;
+        const meshA = getPartMeshes(a.partId)[0];
+        const meshB = getPartMeshes(b.partId)[0];
+        if (!meshA || !meshB) return;
+
+        pushHistory();
+
+        const worldAxisA = toWorldNormal(meshA, new THREE.Vector3(...a.normal)).normalize();
+        const worldAxisB = toWorldNormal(meshB, new THREE.Vector3(...b.normal)).normalize();
+        // Only the shared LINE matters for coaxial alignment, not which way
+        // each feature's normal happens to point — pick whichever sign
+        // needs the smaller rotation from B's current orientation, so a
+        // Smart Fit never flips the part further than necessary.
+        const targetDir = worldAxisB.dot(worldAxisA) >= 0 ? worldAxisA.clone() : worldAxisA.clone().negate();
+        const rotQuat = new THREE.Quaternion().setFromUnitVectors(worldAxisB, targetDir);
+        meshB.quaternion.premultiply(rotQuat);
+        meshB.updateMatrixWorld(true);
+
+        // Bring the axes into coincidence (radially) while leaving B's
+        // position along that shared axis exactly where it was — how far a
+        // pin is inserted into a hole is a real choice, not something to
+        // silently reset to zero.
+        const worldPointA = toWorldPoint(meshA, new THREE.Vector3(...a.point));
+        const worldPointB = toWorldPoint(meshB, new THREE.Vector3(...b.point));
+        const toA = worldPointA.clone().sub(worldPointB);
+        const alongAxis = toA.dot(targetDir);
+        const radialCorrection = toA.clone().sub(targetDir.clone().multiplyScalar(alongAxis));
+        meshB.position.add(radialCorrection);
+        meshB.updateMatrixWorld(true);
+
+        updateDimensions();
+        updateSelectedPartPosition();
+        refreshMateMarkers();
+        useAppStore.getState().setMate({ fitted: true });
       },
 
       weldMatedParts: () => {
