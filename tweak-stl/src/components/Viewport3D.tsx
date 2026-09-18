@@ -78,6 +78,8 @@ interface PartMeta {
   features: PartFeature[];
   localOrigin: THREE.Vector3;
   lockToPlate: boolean;
+  visible: boolean;
+  locked: boolean;
 }
 
 interface HistoryMeshSnapshot {
@@ -87,13 +89,15 @@ interface HistoryMeshSnapshot {
   features: PartFeature[];
   localOrigin: [number, number, number];
   lockToPlate: boolean;
+  visible: boolean;
+  locked: boolean;
   position: [number, number, number];
   quaternion: [number, number, number, number];
   scale: [number, number, number];
 }
 
 function freshPartMeta(baseGeometry: THREE.BufferGeometry): PartMeta {
-  return { baseGeometry, features: [], localOrigin: new THREE.Vector3(0, 0, 0), lockToPlate: false };
+  return { baseGeometry, features: [], localOrigin: new THREE.Vector3(0, 0, 0), lockToPlate: false, visible: true, locked: false };
 }
 
 interface HistorySnapshot {
@@ -162,6 +166,8 @@ export default function Viewport3D() {
   const addPartMesh = (partId: string, label: string, mesh: THREE.Mesh) => {
     mesh.userData.partId = partId;
     mesh.userData.partLabel = label;
+    const meta = getPartMeta(partId);
+    mesh.visible = meta?.visible ?? true;
     modelGroupRef.current.add(mesh);
   };
 
@@ -232,7 +238,7 @@ export default function Viewport3D() {
     const parts: PartInfo[] = Array.from(seen.entries()).map(([id, label]) => {
       const meta = getPartMeta(id);
       const origin = meta?.localOrigin ?? new THREE.Vector3(0, 0, 0);
-      return { id, label, localOrigin: toTuple3(origin), lockToPlate: meta?.lockToPlate ?? false };
+      return { id, label, localOrigin: toTuple3(origin), lockToPlate: meta?.lockToPlate ?? false, visible: meta?.visible ?? true, locked: meta?.locked ?? false };
     });
     useAppStore.getState().setParts(parts);
     seen.forEach((_, id) => syncPartFeaturesToStore(id));
@@ -506,6 +512,8 @@ export default function Viewport3D() {
         features: meta ? meta.features.map(cloneFeature) : [],
         localOrigin: meta ? toTuple3(meta.localOrigin) : [0, 0, 0],
         lockToPlate: meta?.lockToPlate ?? false,
+        visible: meta?.visible ?? true,
+        locked: meta?.locked ?? false,
         position: m.position.toArray() as [number, number, number],
         quaternion: m.quaternion.toArray() as [number, number, number, number],
         scale: m.scale.toArray() as [number, number, number],
@@ -533,6 +541,8 @@ export default function Viewport3D() {
         features: ms.features.map(cloneFeature),
         localOrigin: new THREE.Vector3(...ms.localOrigin),
         lockToPlate: ms.lockToPlate,
+        visible: ms.visible ?? true,
+        locked: ms.locked ?? false,
       };
       partMetaRef.current.set(ms.partId, meta);
       const compiled = rebuildCompositeGeometry(meta.baseGeometry, meta.features, getThreadRenderOptions, materialRef.current);
@@ -659,8 +669,48 @@ export default function Viewport3D() {
     grid.rotateX(Math.PI / 2);
     scene.add(grid);
 
-    const axes = new THREE.AxesHelper(40);
+    const AXIS_LENGTH = 40;
+    const axes = new THREE.AxesHelper(AXIS_LENGTH);
     scene.add(axes);
+
+    // Label the tip of each world-axis line (X+/Y+/Z+) so the viewport's
+    // orientation is legible without having to infer it from color alone.
+    // Sprites always billboard to face the camera, and depthTest is off so
+    // the labels stay readable even when a part is in front of the axis tip.
+    const makeAxisLabelTexture = (text: string, colorHex: string): THREE.CanvasTexture => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 64;
+      const ctx = canvas.getContext('2d')!;
+      ctx.font = 'bold 40px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 8;
+      ctx.strokeStyle = 'rgba(11,13,18,0.95)';
+      ctx.strokeText(text, 64, 34);
+      ctx.fillStyle = colorHex;
+      ctx.fillText(text, 64, 34);
+      return new THREE.CanvasTexture(canvas);
+    };
+    const makeAxisLabel = (text: string, colorHex: string, position: THREE.Vector3): THREE.Sprite => {
+      const sprite = new THREE.Sprite(
+        // sizeAttenuation: false keeps the label a constant size on screen
+        // regardless of camera distance — a world-space scale would blow up
+        // to fill the screen whenever a framing preset (e.g. Top) happens
+        // to put the camera close to the label's position.
+        new THREE.SpriteMaterial({ map: makeAxisLabelTexture(text, colorHex), depthTest: false, transparent: true, sizeAttenuation: false }),
+      );
+      sprite.scale.set(0.09, 0.045, 1);
+      sprite.position.copy(position);
+      sprite.renderOrder = 998;
+      return sprite;
+    };
+    const axisLabels = new THREE.Group();
+    axisLabels.add(makeAxisLabel('X+', '#ff3b3b', new THREE.Vector3(AXIS_LENGTH + 5, 0, 0)));
+    axisLabels.add(makeAxisLabel('Y+', '#4ade80', new THREE.Vector3(0, AXIS_LENGTH + 5, 0)));
+    axisLabels.add(makeAxisLabel('Z+', '#60a5fa', new THREE.Vector3(0, 0, AXIS_LENGTH + 5)));
+    scene.add(axisLabels);
 
     scene.add(modelGroupRef.current);
 
@@ -763,7 +813,10 @@ export default function Viewport3D() {
         -((event.clientY - rect.top) / rect.height) * 2 + 1,
       );
       raycasterRef.current.setFromCamera(ndc, camera);
-      const hits = raycasterRef.current.intersectObjects(getAllPartMeshes(), false);
+      // Three.js raycasting ignores `.visible` entirely, so a hidden part
+      // (Parts panel eye toggle) would otherwise still catch clicks for
+      // hole/primitive placement, dragging, origin-picking, and selection.
+      const hits = raycasterRef.current.intersectObjects(getAllPartMeshes().filter((m) => m.visible), false);
       return hits[0] ?? null;
     };
 
@@ -793,14 +846,14 @@ export default function Viewport3D() {
 
     const beginPlateDrag = (event: PointerEvent): boolean => {
       const tool = useAppStore.getState().activeTool;
-      if (event.button !== 0 || (tool !== 'select' && tool !== 'move')) return false;
+      if (event.button !== 0 || (tool !== 'select' && tool !== 'transform')) return false;
       if (transformControlsRef.current?.dragging) return false; // let the gizmo handle its own drag
       const hit = getIntersection(event);
       if (!hit) return false;
       const partId = hit.object.userData.partId as string | undefined;
       if (!partId) return false;
       const part = useAppStore.getState().parts.find((p) => p.id === partId);
-      if (!part?.lockToPlate) return false;
+      if (!part?.lockToPlate || part.locked) return false;
 
       const mesh = hit.object as THREE.Mesh;
       const ground = new THREE.Vector3();
@@ -1159,6 +1212,8 @@ export default function Viewport3D() {
       },
 
       applyScale: (x, y, z) => {
+        const meta = getPartMeta(getActivePartId() ?? '');
+        if (meta?.locked) return;
         const activePartId = getActivePartId();
         if (!activePartId) return;
         const mesh = getPartMeshes(activePartId)[0];
@@ -1172,6 +1227,8 @@ export default function Viewport3D() {
       },
 
       rotateBy: (axis, degrees) => {
+        const meta = getPartMeta(getActivePartId() ?? '');
+        if (meta?.locked) return;
         const activePartId = getActivePartId();
         if (!activePartId) return;
         const mesh = getPartMeshes(activePartId)[0];
@@ -1186,6 +1243,8 @@ export default function Viewport3D() {
       },
 
       centerToOrigin: () => {
+        const meta = getPartMeta(getActivePartId() ?? '');
+        if (meta?.locked) return;
         const activePartId = getActivePartId();
         if (!activePartId) return;
         const mesh = getPartMeshes(activePartId)[0];
@@ -1199,6 +1258,8 @@ export default function Viewport3D() {
       },
 
       dropToBuildPlate: () => {
+        const meta = getPartMeta(getActivePartId() ?? '');
+        if (meta?.locked) return;
         const activePartId = getActivePartId();
         if (!activePartId) return;
         const mesh = getPartMeshes(activePartId)[0];
@@ -1210,6 +1271,8 @@ export default function Viewport3D() {
       },
 
       mirror: (axis: PlaneAxis) => {
+        const meta = getPartMeta(getActivePartId() ?? '');
+        if (meta?.locked) return;
         const activePartId = getActivePartId();
         if (!activePartId) return;
         const mesh = getPartMeshes(activePartId)[0];
@@ -1226,7 +1289,7 @@ export default function Viewport3D() {
         if (!partId || !point || !normal) return;
         const mesh = getPartMeshes(partId)[0];
         const meta = getPartMeta(partId);
-        if (!mesh || !meta) return;
+        if (!mesh || !meta || meta.locked) return;
 
         pushHistory();
 
@@ -1247,6 +1310,7 @@ export default function Viewport3D() {
             type: 'hole',
             label: `Hole ${holeCount}`,
             locked: false,
+            visible: true,
             point: toTuple3(localPoint),
             normal: toTuple3(localNormal),
             diameter,
@@ -1279,7 +1343,7 @@ export default function Viewport3D() {
         if (!partId || !p.point || !p.normal) return;
         const mesh = getPartMeshes(partId)[0];
         const meta = getPartMeta(partId);
-        if (!mesh || !meta) return;
+        if (!mesh || !meta || meta.locked) return;
 
         pushHistory();
 
@@ -1312,6 +1376,7 @@ export default function Viewport3D() {
             type: 'primitive',
             label: `${p.operation === 'union' ? 'Add' : 'Cut'} ${p.shape} ${count}`,
             locked: false,
+            visible: true,
             point: toTuple3(localPoint),
             normal: toTuple3(localNormal),
             diameter: p.diameter,
@@ -1375,6 +1440,7 @@ export default function Viewport3D() {
       },
 
       movePartTo: (partId, x, y, z) => {
+        if (getPartMeta(partId)?.locked) return;
         const meshes = getPartMeshes(partId);
         if (meshes.length === 0) return;
         pushHistoryCoalesced('move-' + partId);
@@ -1392,6 +1458,7 @@ export default function Viewport3D() {
       },
 
       nudgePart: (partId, axis, deltaMM) => {
+        if (getPartMeta(partId)?.locked) return;
         const meshes = getPartMeshes(partId);
         if (meshes.length === 0) return;
         pushHistory();
@@ -1545,6 +1612,7 @@ export default function Viewport3D() {
         const meta = getPartMeta(partId);
         const feature = meta?.features.find((f) => f.id === featureId);
         if (!meta || !feature) return;
+        pushHistory();
         feature.locked = !feature.locked;
         syncPartFeaturesToStore(partId);
         if (useAppStore.getState().selectedFeatureId === featureId) {
@@ -1572,6 +1640,122 @@ export default function Viewport3D() {
         const meta = getPartMeta(partId);
         if (!meta) return;
         meta.localOrigin.set(x, y, z);
+        updateParts();
+      },
+
+      setPartVisible: (partId, visible) => {
+        const meta = getPartMeta(partId);
+        if (!meta) return;
+        meta.visible = visible;
+        getPartMeshes(partId).forEach((m) => { m.visible = visible; });
+        updateParts();
+      },
+
+      setPartLocked: (partId, locked) => {
+        const meta = getPartMeta(partId);
+        if (!meta) return;
+        meta.locked = locked;
+        updateParts();
+      },
+
+      renamePart: (partId, label) => {
+        const next = label.trim();
+        if (!next) return;
+        pushHistory();
+        getPartMeshes(partId).forEach((m) => { m.userData.partLabel = next; });
+        updateParts();
+      },
+
+      duplicatePart: (partId) => {
+        const source = getPartMeshes(partId)[0];
+        const meta = getPartMeta(partId);
+        if (!source || !meta) return;
+        pushHistory();
+        const newId = generatePartId();
+        const geometry = source.geometry.clone();
+        const mesh = new THREE.Mesh(geometry, materialRef.current);
+        mesh.name = 'ModelPiece';
+        mesh.position.copy(source.position);
+        mesh.quaternion.copy(source.quaternion);
+        mesh.scale.copy(source.scale);
+        const labelBase = String(source.userData.partLabel ?? 'Part');
+        const existing = getAllPartMeshes().filter((m) => String(m.userData.partLabel ?? '').startsWith(labelBase)).length;
+        const label = `${labelBase} copy${existing > 1 ? ` ${existing}` : ''}`;
+        partMetaRef.current.set(newId, {
+          baseGeometry: meta.baseGeometry.clone(),
+          features: meta.features.map(cloneFeature),
+          localOrigin: meta.localOrigin.clone(),
+          lockToPlate: meta.lockToPlate,
+          visible: meta.visible,
+          locked: false,
+        });
+        mesh.position.x += 10;
+        mesh.userData.partId = newId;
+        mesh.userData.partLabel = label;
+        mesh.visible = meta.visible;
+        modelGroupRef.current.add(mesh);
+        useAppStore.getState().setSelectedPartId(newId);
+        updateParts();
+      },
+
+      deletePart: (partId) => {
+        const meshes = getPartMeshes(partId);
+        if (meshes.length === 0) return;
+        pushHistory();
+        removePartMeshes(partId);
+        const meta = getPartMeta(partId);
+        meta?.baseGeometry.dispose();
+        partMetaRef.current.delete(partId);
+        const remaining = getAllPartMeshes();
+        useAppStore.getState().setSelectedPartId(remaining[0]?.userData.partId ?? null);
+        if (remaining.length === 0) {
+          useAppStore.getState().setHasModel(false);
+          useAppStore.getState().setFileName(null);
+        }
+        updateParts();
+      },
+
+      isolatePart: (partId) => {
+        partMetaRef.current.forEach((meta, id) => { meta.visible = id === partId; });
+        getAllPartMeshes().forEach((m) => { m.visible = m.userData.partId === partId; });
+        useAppStore.getState().setSelectedPartId(partId);
+        updateParts();
+      },
+
+      showAllParts: () => {
+        partMetaRef.current.forEach((meta) => { meta.visible = true; });
+        getAllPartMeshes().forEach((m) => { m.visible = true; });
+        updateParts();
+      },
+
+      renameFeature: (partId, featureId, label) => {
+        const meta = getPartMeta(partId);
+        const feature = meta?.features.find((f) => f.id === featureId);
+        const next = label.trim();
+        if (!feature || !next) return;
+        pushHistory();
+        feature.label = next;
+        syncPartFeaturesToStore(partId);
+      },
+
+      setFeatureVisible: (partId, featureId, visible) => {
+        const meta = getPartMeta(partId);
+        const feature = meta?.features.find((f) => f.id === featureId);
+        if (!feature) return;
+        pushHistory();
+        feature.visible = visible;
+        rebuildPart(partId);
+      },
+
+      focusFeature: (partId, featureId) => {
+        const meta = getPartMeta(partId);
+        if (!meta) return;
+        const feature = meta.features.find((f) => f.id === featureId);
+        if (!feature) return;
+        meta.visible = true;
+        getAllPartMeshes().forEach((m) => { m.visible = m.userData.partId === partId; });
+        useAppStore.getState().setSelectedPartId(partId);
+        viewportActionsRef.current?.editFeature(partId, featureId);
         updateParts();
       },
 
@@ -1857,13 +2041,13 @@ export default function Viewport3D() {
       const tc = transformControlsRef.current;
       if (!tc) return;
 
-      if (state.activeTool === 'move' && state.selectedPartId) {
+      if (state.activeTool === 'transform' && state.selectedPartId) {
+        const part = state.parts.find((p) => p.id === state.selectedPartId);
         const mesh = getPartMeshes(state.selectedPartId)[0];
-        if (mesh) {
+        if (mesh && !part?.locked) {
           tc.attach(mesh);
           tc.getHelper().visible = true;
           tc.enabled = true;
-          const part = state.parts.find((p) => p.id === state.selectedPartId);
           tc.showZ = !part?.lockToPlate;
           return;
         }

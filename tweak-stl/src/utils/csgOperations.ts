@@ -203,6 +203,7 @@ export interface CompositeFeature {
   width: number;
   height: number;
   innerDiameter: number;
+  visible?: boolean;
 }
 
 /**
@@ -223,6 +224,7 @@ export function rebuildCompositeGeometry(
   let current = normalizeForCSG(baseGeometry);
 
   for (const f of features) {
+    if (f.visible === false) continue;
     const point = new THREE.Vector3(...f.point);
     const normal = new THREE.Vector3(...f.normal);
     const isHole = f.type === 'hole';

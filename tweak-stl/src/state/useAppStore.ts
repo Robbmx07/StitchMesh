@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { GENERIC_PRINTER_ID } from '@/utils/printerProfiles';
 import type { Units } from '@/utils/units';
 
-export type ToolId = 'select' | 'transform' | 'hole' | 'primitive' | 'planeCut' | 'move' | 'measure' | 'mate' | 'shapes';
+export type ToolId = 'select' | 'transform' | 'hole' | 'primitive' | 'planeCut' | 'measure' | 'mate' | 'shapes';
 export type PrimitiveShape = 'box' | 'cylinder' | 'washer';
 export type PrimitiveOp = 'union' | 'subtract';
 export type PlaneAxis = 'x' | 'y' | 'z';
@@ -115,6 +115,10 @@ export interface PartInfo {
   localOrigin: [number, number, number];
   /** When true, the part's viewport drag gizmo is constrained to X/Y — it can't be dragged off the build plate in Z. */
   lockToPlate: boolean;
+  /** Part is visible in the viewport. */
+  visible: boolean;
+  /** Prevents direct movement/transform of the part until unlocked. */
+  locked: boolean;
 }
 
 /**
@@ -128,6 +132,8 @@ export interface PartFeature {
   label: string;
   /** Prevents further edits (including diameter/thread) until unlocked. */
   locked: boolean;
+  /** Whether the feature is currently enabled in the composite preview. */
+  visible: boolean;
   point: [number, number, number];
   normal: [number, number, number];
   diameter: number;
@@ -200,6 +206,16 @@ export interface ViewportActions {
   resetLocalOrigin: (partId: string) => void;
   setLocalOrigin: (partId: string, x: number, y: number, z: number) => void;
   setLockToPlate: (partId: string, locked: boolean) => void;
+  setPartVisible: (partId: string, visible: boolean) => void;
+  setPartLocked: (partId: string, locked: boolean) => void;
+  renamePart: (partId: string, label: string) => void;
+  duplicatePart: (partId: string) => void;
+  deletePart: (partId: string) => void;
+  isolatePart: (partId: string) => void;
+  showAllParts: () => void;
+  renameFeature: (partId: string, featureId: string, label: string) => void;
+  setFeatureVisible: (partId: string, featureId: string, visible: boolean) => void;
+  focusFeature: (partId: string, featureId: string) => void;
 
   /** Adds a new independent part built from the current Shapes-tool selection. */
   addBasicShape: () => void;

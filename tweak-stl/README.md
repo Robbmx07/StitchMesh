@@ -68,15 +68,17 @@ into memory via the File API), and export always saves a *new* file
 through the browser's normal download flow — your source `.stl` is never
 modified or overwritten.
 
-## Features (MVP)
+## Features
 
 - Drag-and-drop or file-picker STL import, binary STL export
 - Orbit/pan/zoom viewport with Top/Front/Side/Iso presets, wireframe, flat
-  shading, and a live bounding-box (X × Y × Z) readout — left-drag or
-  middle-drag both orbit, and middle-drag re-centers on whatever's under
-  the cursor at the moment you click, not a fixed pivot
-- Uniform/non-uniform scaling, 90° rotation snaps, center-to-origin, and
-  drop-to-build-plate
+  shading, and a live bounding-box (X × Y × Z) readout — middle-drag orbits
+  (and re-centers on whatever's under the cursor at the moment you click,
+  not a fixed pivot), right-drag pans, and left-drag is reserved for tool
+  clicks and dragging Lock to Plate parts across the bed
+- Uniform/non-uniform scaling, 90° rotation snaps, free-angle rotation, center-to-origin, drop-to-build-plate, and mirror
+- **Parts-first scene management**: per-part visibility, Lock to Plate, full part lock, rename, duplicate, isolate/show-all, delete, and a context menu for direct operation shortcuts
+- **Feature history controls**: per-feature visibility, locking, rename, focus/edit, and delete
 - **Hole Modifier**: click a point on the model, size a cutting cylinder,
   and boolean-subtract it — optionally as a standard internal (tapped)
   thread instead of a smooth hole
@@ -86,6 +88,7 @@ modified or overwritten.
   subtracted)
 - **Plane Cut**: slice the model into two pieces along an axis-aligned
   plane
+- **Unified Transform workspace**: positioning/move controls now live with scale, rotate, mirror, and plate placement instead of a separate Move tab
 
 ## Standard thread sizes
 

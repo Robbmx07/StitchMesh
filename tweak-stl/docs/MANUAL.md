@@ -1,5 +1,7 @@
 # StitchMesh — Complete User Manual
 
+> **Release update: Parts-first workflow** — this edition documents the persistent Parts command center, visibility controls, part locking, context actions, feature visibility/naming, and the combined Transform/Move workspace.
+
 *"Modify, don't model."* StitchMesh is an offline tool for making localized
 edits to an existing `.stl` file — resize a hole, add a threaded boss, mate
 and weld two parts together, cut a model in two and move the pieces apart,
@@ -93,6 +95,18 @@ view — turn the model and the cube turns with it. Each face is labeled:
 the bright **X** / **Y** / **Z** faces point along the positive axis, the
 matching darker **-X** / **-Y** / **-Z** faces point the other way.
 
+**World axis lines**: three colored reference lines run from the build
+plate's origin — red for X, green for Y, blue for Z — and each one is
+labeled **X+**, **Y+**, or **Z+** right at its tip, so you can read the
+scene's orientation directly off the lines themselves, not just the
+corner cube. The label always faces the camera and stays legible even
+when a part sits in front of it.
+
+![Labeled world axis lines](manual-assets/03b-axis-labels.png)
+
+*Each axis line ends in a colored, always-camera-facing "+" label —
+X/Y/Z orientation is readable at a glance from anywhere in the scene.*
+
 **Display toggles** (toolbar icons, or keyboard **W** / **B**):
 
 | Icon / key | Toggle | Effect |
@@ -166,16 +180,25 @@ collapsible via the `«` button in its header.
 
 ![Parts panel with a layered feature](manual-assets/07a-parts-panel.png)
 
-*Two independent parts. `cubeA.stl` has one feature nested under it,
-**Hole 1** — its own lock and delete icons sit to the right of the label,
-and an anchor icon at the far right of each part's own row is its
-**Lock to plate** toggle (see below). `cubeB.stl` has no features yet.
-Each part also carries its own Local Origin editor.*
+*Two independent parts. Each part has a dedicated **Lock to Build Plate (Z)**
+toggle directly beneath its name. Feature controls remain nested under the
+part, and each part also carries its own Reference Origin editor.*
 
 **Each part is fully independent** — selecting a part (click its row, or
 use the **Part** dropdown on the Move/Cut tabs) makes it the target for
 Transform, Move, Mirror, and Plane Cut; none of those actions touch any
 other part.
+
+### Persistent part controls
+
+The Parts panel is now the command center for state that belongs to an object rather than to a temporary tool. Each part row can show:
+
+- **Eye** — show/hide the part without deleting it.
+- **Lock to Build Plate (Z)** — the per-part toggle directly beneath the part name. This pins the part to Z=0 while keeping X/Y movement available.
+- **Part lock** — freezes direct movement and transformation until unlocked. Feature editing remains available, so you can protect placement without making the model unusable.
+- **Actions menu** — rename, duplicate, isolate, show all, lock/unlock, lock/unlock to plate, jump directly to Transform/Hole/Modify, or delete the part.
+
+Right-clicking a part opens the same action menu. Double-clicking a feature name lets you rename it.
 
 ### Feature layers
 
@@ -186,10 +209,12 @@ of being baked in and forgotten:
 - **Click a feature's name** to reopen it in the Hole/Primitive panel with
   its exact diameter, depth, thread, and position — change anything and
   click **Save Changes**, or **Delete Feature** to remove it entirely.
+- **Eye icon** — temporarily hides/shows the feature. Hidden features are excluded from the live composite while the base mesh remains visible.
 - **Lock icon** — freezes a feature (including its thread/diameter) so it
   can't be accidentally changed; click the feature and every field is
   replaced with a locked notice until you unlock it again from the same
   icon.
+- **More (…) menu** — edit/focus, rename, hide/show, lock/unlock, or delete the feature.
 - **Delete icon** (trash) — removes that one feature immediately (fully
   undoable — `Ctrl+Z` brings it right back).
 
@@ -236,9 +261,9 @@ then type the exact X/Y/Z offsets for each hole.
 
 ### Lock to plate
 
-The anchor icon on each part's own row toggles **Lock to plate**. Turning
-it on immediately drops that part to the build plate (Z=0) and keeps it
-pinned there afterward:
+The **Lock to Build Plate (Z)** switch directly beneath each part name toggles
+**Lock to plate**. Turning it on immediately drops that part to the build plate
+(Z=0) and keeps it pinned there afterward:
 
 - The Move tool's Z field and Z-nudge buttons become disabled for that
   part, and its viewport drag gizmo hides its Z handle.
@@ -433,7 +458,7 @@ selectable parts** along an axis-aligned plane.
 
 ---
 
-## 13. Move tool
+## 13. Transform and Move
 
 Tab: **Move**. Selects a part and repositions it — either directly in the
 viewport, or with the numeric fields.
@@ -441,7 +466,7 @@ viewport, or with the numeric fields.
 ![Move panel before separating](manual-assets/14a-move-panel-before-separate.png)
 
 *Right after a Plane Cut: two selectable parts exist in the Parts panel
-(`cube.stl (upper)` / `(lower)`), but they still occupy the same space.*
+(`cube.stl (upper)` / `(lower)`), but they still occupy the same space. Their positions can be separated directly from Transform.*
 
 - **Drag gizmo** — the selected part gets colored arrows (and a small
   plane handle) directly in the viewport. Drag an arrow to move along
@@ -457,8 +482,7 @@ viewport, or with the numeric fields.
 selected part. Since this part is locked to plate, there's no blue Z
 arrow — dragging is constrained to the build plate automatically.*
 
-- **Part** dropdown — pick which object to move (hidden with only one
-  part; you can also just click its row in the Parts panel).
+- The selected part is taken directly from the Parts panel. There is no separate Move tab to revisit just to change position.
 - **Position X / Y / Z** — absolute position; typing a value moves the
   part there directly. Z is disabled while Lock to plate is on.
 - **Snap to grid** — checkbox; when on, typed positions and drags round to
@@ -582,7 +606,27 @@ Saturn 3 (resin), Formlabs Form 4 (resin).
 
 ---
 
-## 18. Every control, at a glance
+## 18. Why the Parts-first workflow matters
+
+StitchMesh deliberately separates **persistent object state** from **temporary operations**:
+
+- The **Parts panel** answers: *What objects are in the scene, which are visible, which are protected, and what modifications belong to each object?*
+- The **viewport** answers: *What am I looking at and where am I clicking?*
+- The **right sidebar** answers: *How should the current operation behave?*
+
+This keeps the interface from becoming a second toolbox inside the object list. Persistent state stays visible on the left; operation parameters stay on the right. Context menus provide shortcuts without duplicating every tool in every part row.
+
+### Recommended workflow
+
+1. Select a part in the Parts panel.
+2. Use the eye/anchor/lock controls to establish its persistent state.
+3. Right-click the part for a direct shortcut such as **Add hole**, **Modify part**, or **Transform**.
+4. Configure the operation in the right sidebar.
+5. Name important features so a later edit is understandable.
+6. Hide or isolate other parts when inspecting a tight assembly.
+7. Use **Measure** before committing a dimension that must fit another part.
+
+## 19. Every control, at a glance
 
 | Location | Control | Does |
 |---|---|---|
@@ -595,12 +639,16 @@ Saturn 3 (resin), Formlabs Form 4 (resin).
 | Toolbar | mm / in | Switch every length field between millimeters and inches |
 | Toolbar | Printer dropdown | Select target printer; tunes thread resolution/clearance |
 | Toolbar | Wireframe / Flat shading / Bounding box | Display toggles (`W` / — / `B`) |
-| Parts panel | Part row | Select that part as the active target; expand/collapse its features |
-| Parts panel | Anchor icon | Toggle Lock to plate for that part |
-| Parts panel | Feature row | Reopen a Hole/Primitive for editing |
-| Parts panel | Lock icon (on a feature) | Freeze/unfreeze a feature against edits |
-| Parts panel | Trash icon | Delete a feature |
-| Parts panel | Pin / Reset / X,Y,Z | Set, reset, or type a part's local origin |
+| Parts panel | Part row | Select the active part; expand/collapse its feature history |
+| Parts panel | Eye icon | Show/hide a part |
+| Parts panel | Lock to Build Plate (Z) toggle | Toggle the part's Z-axis lock to the build plate |
+| Parts panel | Part lock icon | Prevent movement/transformation until unlocked |
+| Parts panel | Actions / right-click | Rename, duplicate, isolate, show all, jump to tools, or delete |
+| Parts panel | Feature eye | Show/hide an individual modifier feature |
+| Parts panel | Feature row | Reopen/focus a Hole/Primitive for editing |
+| Parts panel | Feature lock | Freeze/unfreeze a feature against edits |
+| Parts panel | Feature menu | Rename, focus, hide/show, lock/unlock, or delete |
+| Parts panel | Pin / Reset / X,Y,Z | Set, reset, or type a part's reference origin |
 | Parts panel | `«` / `»` | Collapse/expand the whole panel |
 | Viewport | Middle-drag | Orbit (re-centers on what's under the cursor) |
 | Viewport | Right-drag | Pan |
@@ -610,26 +658,25 @@ Saturn 3 (resin), Formlabs Form 4 (resin).
 | Sidebar → Info | (read-only) | File name, selected part's bounding box |
 | Sidebar → Transform | Scale X/Y/Z, Uniform | Resize the selected part |
 | Sidebar → Transform | Rotate ±90° (×3 axes), Free angle | Rotate the selected part |
-| Sidebar → Transform | Center to Origin, Drop to Build Plate | Reposition the selected part |
+| Sidebar → Transform | Position X/Y/Z, Center, Drop to Plate | Reposition the selected part |
 | Sidebar → Transform | Mirror X/Y/Z | Flip the selected part |
 | Sidebar → Hole | Diameter, Depth, Thread | Configure a hole cutter after clicking a point |
 | Sidebar → Hole | Offset from local origin X/Y/Z | Fine-tune placement numerically |
 | Sidebar → Hole | Apply Boolean Subtract / Save Changes / Cancel / Delete Feature | Commit, update, discard, or remove |
-| Sidebar → Primitive | Shape, Operation, dimensions, Thread | Configure a primitive after clicking a point |
+| Sidebar → Modify | Shape, Operation, dimensions, Thread | Configure a modifier after clicking a point |
 | Sidebar → Primitive | Apply / Save Changes / Cancel / Delete Feature | Commit, update, discard, or remove |
-| Sidebar → Shapes | Shape, dimensions, Split in half | Configure a new standalone part |
+| Sidebar → New Part | Shape, dimensions, Split in half | Configure a new standalone part |
 | Sidebar → Shapes | Add to Scene | Create the new part |
 | Sidebar → Cut | Part, Axis, Height, Apply Cut | Split the target part in two |
 | Sidebar → Mate | (click two faces) | Pick which parts and faces to mate |
 | Sidebar → Mate | Fit / Re-fit | Rotate + slide part B flush against part A |
 | Sidebar → Mate | Pick Edge Points, Align Edge | Fine-align B within the mated plane |
 | Sidebar → Mate | Weld | Permanently merge A and B into one part |
-| Sidebar → Move | Part, Position X/Y/Z, Snap, nudge | Reposition a part numerically |
 | Sidebar → Measure | (click viewport) | Set datum, measure distance/deltas |
 
 ---
 
-## 19. Accuracy & validity review
+## 20. Accuracy & validity review
 
 A full-codebase review (an automated correctness pass, plus manual
 re-derivation of the placement math for every tool) has been run across

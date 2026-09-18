@@ -59,6 +59,10 @@
     @apply border-accent-600 bg-accent-600/20 text-accent-500;
   }
 
+  .menu-item {
+    @apply flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-slate-300 transition-colors hover:bg-base-800 hover:text-slate-100;
+  }
+
   .tool-tab {
     @apply flex-1 rounded-md px-3 py-2 text-center text-xs font-medium text-slate-400 transition-colors hover:text-slate-200;
   }

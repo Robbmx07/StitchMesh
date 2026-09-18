@@ -6,7 +6,6 @@ import {
   Flame,
   FlipHorizontal2,
   Info,
-  Move,
   Puzzle,
   Ruler,
   Scissors,
@@ -28,11 +27,10 @@ const TOOL_TABS: { id: ToolId; label: string; icon: typeof Info }[] = [
   { id: 'select', label: 'Info', icon: Info },
   { id: 'transform', label: 'Transform', icon: Scale },
   { id: 'hole', label: 'Hole', icon: Circle },
-  { id: 'primitive', label: 'Primitive', icon: SquarePlus },
-  { id: 'shapes', label: 'Shapes', icon: ShapesIcon },
+  { id: 'primitive', label: 'Modify', icon: SquarePlus },
+  { id: 'shapes', label: 'New Part', icon: ShapesIcon },
   { id: 'planeCut', label: 'Cut', icon: Scissors },
   { id: 'mate', label: 'Mate', icon: Puzzle },
-  { id: 'move', label: 'Move', icon: Move },
   { id: 'measure', label: 'Measure', icon: Ruler },
 ];
 
@@ -261,7 +259,9 @@ function SelectPanel() {
 }
 
 function TransformPanel() {
-  const { transform, dimensions, hasModel, setTransform, viewportActions } = useAppStore();
+  const { transform, dimensions, hasModel, parts, selectedPartId, setTransform, viewportActions } = useAppStore();
+  const selectedPart = parts.find((p) => p.id === selectedPartId);
+  const transformLocked = !!selectedPart?.locked;
 
   const applyScale = (x: number, y: number, z: number) => {
     setTransform({ scaleX: x, scaleY: y, scaleZ: z });
@@ -291,12 +291,13 @@ function TransformPanel() {
           <input
             type="checkbox"
             checked={transform.uniformScale}
+            disabled={transformLocked}
             onChange={(e) => setTransform({ uniformScale: e.target.checked })}
           />
         </div>
-        <NumberField label="Width (X)" value={dimensions.x} onChange={(v) => handleAxisChange('x', v)} />
-        <NumberField label="Depth (Y)" value={dimensions.y} onChange={(v) => handleAxisChange('y', v)} />
-        <NumberField label="Height (Z)" value={dimensions.z} onChange={(v) => handleAxisChange('z', v)} />
+        <NumberField label="Width (X)" value={dimensions.x} disabled={transformLocked} onChange={(v) => handleAxisChange('x', v)} />
+        <NumberField label="Depth (Y)" value={dimensions.y} disabled={transformLocked} onChange={(v) => handleAxisChange('y', v)} />
+        <NumberField label="Height (Z)" value={dimensions.z} disabled={transformLocked} onChange={(v) => handleAxisChange('z', v)} />
         <p className="text-[11px] text-slate-500">
           Scaling permanently folds this part's existing Hole/Primitive features into its base shape — see the Parts panel.
         </p>
@@ -309,10 +310,10 @@ function TransformPanel() {
             <div key={axis} className="field-row">
               <span className="text-sm uppercase text-slate-300">{axis}</span>
               <div className="flex gap-1.5">
-                <button className="btn w-20" disabled={!hasModel} onClick={() => viewportActions?.rotateBy(axis, -90)}>
+                <button className="btn w-20" disabled={!hasModel || transformLocked} onClick={() => viewportActions?.rotateBy(axis, -90)}>
                   −90°
                 </button>
-                <button className="btn w-20" disabled={!hasModel} onClick={() => viewportActions?.rotateBy(axis, 90)}>
+                <button className="btn w-20" disabled={!hasModel || transformLocked} onClick={() => viewportActions?.rotateBy(axis, 90)}>
                   +90°
                 </button>
               </div>
@@ -338,22 +339,15 @@ function TransformPanel() {
         </div>
         <button
           className="btn w-full"
-          disabled={!hasModel || transform.freeRotateDegrees === 0}
+          disabled={!hasModel || transformLocked || transform.freeRotateDegrees === 0}
           onClick={() => viewportActions?.rotateBy(transform.freeRotateAxis, transform.freeRotateDegrees)}
         >
           Rotate
         </button>
       </div>
 
-      <div className="panel-section space-y-2">
-        <div className="panel-label">Position</div>
-        <button className="btn w-full" disabled={!hasModel} onClick={() => viewportActions?.centerToOrigin()}>
-          Center to Origin
-        </button>
-        <button className="btn w-full" disabled={!hasModel} onClick={() => viewportActions?.dropToBuildPlate()}>
-          Drop to Build Plate
-        </button>
-      </div>
+      <MovePanel />
+      {transformLocked && <p className="px-4 pb-2 text-[11px] text-amber-500">Part locked — unlock it in the Parts panel to transform or move it.</p>}
 
       <div className="panel-section space-y-2">
         <div className="panel-label">Mirror</div>
@@ -362,7 +356,7 @@ function TransformPanel() {
             <button
               key={axis}
               className="btn flex items-center justify-center gap-1"
-              disabled={!hasModel}
+              disabled={!hasModel || transformLocked}
               onClick={() => viewportActions?.mirror(axis)}
             >
               <FlipHorizontal2 className="h-3.5 w-3.5" />
@@ -473,7 +467,7 @@ function PrimitivePanel() {
 
   return (
     <div className="panel-section space-y-3">
-      <div className="panel-label">{isEditing ? 'Edit Primitive Feature' : 'Primitive'}</div>
+      <div className="panel-label">{isEditing ? 'Edit Modifier' : 'Modify Part'}</div>
       {!hasModel ? (
         <p className="text-sm text-slate-500">Load a model first.</p>
       ) : isEditing && primitive.locked ? (
@@ -843,7 +837,6 @@ function MovePanel() {
   return (
     <div className="panel-section space-y-3">
       <div className="panel-label">Move</div>
-      <PartSelector />
       {parts.length <= 1 && (
         <p className="text-xs text-slate-500">
           Only one part in the scene — Plane Cut produces two independently movable parts, or use Shapes/Add Part to add another.
@@ -853,10 +846,11 @@ function MovePanel() {
         Drag the arrows on the selected part directly in the viewport, or type exact positions below. A part with Lock to plate on
         (Parts panel) can also be dragged directly — left-click and slide it across the build plate, no arrows needed.
       </p>
-      <NumberField label="Position X" value={position[0]} onChange={(v) => handlePositionChange(0, v)} />
-      <NumberField label="Position Y" value={position[1]} onChange={(v) => handlePositionChange(1, v)} />
-      <NumberField label="Position Z" value={position[2]} disabled={!!selectedPart?.lockToPlate} onChange={(v) => handlePositionChange(2, v)} />
-      {selectedPart?.lockToPlate && (
+      <NumberField label="Position X" value={position[0]} disabled={!!selectedPart?.locked} onChange={(v) => handlePositionChange(0, v)} />
+      <NumberField label="Position Y" value={position[1]} disabled={!!selectedPart?.locked} onChange={(v) => handlePositionChange(1, v)} />
+      <NumberField label="Position Z" value={position[2]} disabled={!!selectedPart?.lockToPlate || !!selectedPart?.locked} onChange={(v) => handlePositionChange(2, v)} />
+      {selectedPart?.locked && <p className="text-[11px] text-amber-500">Part locked — unlock it from the Parts panel before moving or transforming.</p>}
+      {selectedPart?.lockToPlate && !selectedPart?.locked && (
         <p className="text-[11px] text-amber-500">Locked to plate — Z stays pinned to the build plate. Toggle it off in the Parts panel to move it.</p>
       )}
 
@@ -877,14 +871,14 @@ function MovePanel() {
             <div className="flex gap-1">
               <button
                 className="btn"
-                disabled={!selectedPartId || (axis === 'z' && selectedPart?.lockToPlate)}
+                disabled={!selectedPartId || !!selectedPart?.locked || (axis === 'z' && selectedPart?.lockToPlate)}
                 onClick={() => selectedPartId && viewportActions?.nudgePart(selectedPartId, axis, -nudgeAmountMM)}
               >
                 −
               </button>
               <button
                 className="btn"
-                disabled={!selectedPartId || (axis === 'z' && selectedPart?.lockToPlate)}
+                disabled={!selectedPartId || !!selectedPart?.locked || (axis === 'z' && selectedPart?.lockToPlate)}
                 onClick={() => selectedPartId && viewportActions?.nudgePart(selectedPartId, axis, nudgeAmountMM)}
               >
                 +
@@ -992,7 +986,6 @@ export default function Sidebar() {
       {activeTool === 'shapes' && <ShapesPanel />}
       {activeTool === 'planeCut' && <PlaneCutPanel />}
       {activeTool === 'mate' && <MatePanel />}
-      {activeTool === 'move' && <MovePanel />}
       {activeTool === 'measure' && <MeasurePanel />}
     </div>
   );
